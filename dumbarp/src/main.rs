@@ -1,3 +1,4 @@
+use anyhow::Context;
 use aya::{
     Ebpf,
     maps::HashMap,
@@ -30,13 +31,22 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let ip = Ipv4Addr::new(192, 168, 1, 104);
     let ip_key = u32::from_ne_bytes(ip.octets()); // match the program's keying
-    let mac: [u8; 6] = parse_mac("02:1a:c5:01:00:00")?;
+    let mac: [u8; 6] = iface_mac(&opt.iface)?;
 
     table.insert(ip_key, mac, 0)?;
 
-    println!("ARP responder attached to {}. Ctrl-C to exit.", opt.iface);
+    println!(
+        "ARP responder attached to {} (mac {:02x?}). Ctrl-C to exit.",
+        opt.iface, mac
+    );
     tokio::signal::ctrl_c().await?;
     Ok(())
+}
+
+fn iface_mac(iface: &str) -> Result<[u8; 6], anyhow::Error> {
+    let path = format!("/sys/class/net/{iface}/address");
+    let s = std::fs::read_to_string(&path).with_context(|| format!("reading {path}"))?;
+    parse_mac(s.trim())
 }
 
 fn parse_mac(mac_str: &str) -> Result<[u8; 6], anyhow::Error> {

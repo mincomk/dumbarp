@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = [
+members = ["dhcp-lease-read",
     "dumbarp",
-    "dumbarp-common",
+    "dumbarp-common", "dumbarp-daemon",
     "dumbarp-ebpf",
 ]
 default-members = ["dumbarp", "dumbarp-common"]

@@ -1,0 +1,9 @@
+[package]
+name = "dhcp-lease-read"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono = "0.4.44"
+nom = "8.0.0"

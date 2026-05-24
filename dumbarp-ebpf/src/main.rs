@@ -8,11 +8,13 @@ use aya_ebpf::{
     programs::XdpContext,
 };
 use core::mem;
+use dumbarp_common::ArpKey;
 use network_types::eth::{EthHdr, EtherType};
 
-// Map: target IP (u32, network order) -> MAC we answer with ([u8; 6])
+// Map: (ingress ifindex, target IP in network order) -> MAC we answer with.
+// Per-iface keying so XDP_TX replies always carry the egress iface's MAC.
 #[map]
-static ARP_TABLE: HashMap<u32, [u8; 6]> = HashMap::with_max_entries(256, 0);
+static ARP_TABLE: HashMap<ArpKey, [u8; 6]> = HashMap::with_max_entries(256, 0);
 
 // ARP header for IPv4-over-Ethernet. network-types doesn't ship an ArpHdr,
 // so we define our own packed struct.
@@ -72,8 +74,13 @@ fn try_arp(ctx: &XdpContext) -> Result<u32, ()> {
     let tpa = unsafe { (*arp).tpa };
     let target_ip = u32::from_ne_bytes(tpa);
 
-    // Do we answer for this IP?
-    let our_mac = match unsafe { ARP_TABLE.get(&target_ip) } {
+    let key = ArpKey {
+        ifindex: unsafe { (*ctx.ctx).ingress_ifindex },
+        ip: target_ip,
+    };
+
+    // Do we answer for this (iface, IP)?
+    let our_mac = match unsafe { ARP_TABLE.get(&key) } {
         Some(mac) => *mac,
         None => return Ok(xdp_action::XDP_PASS),
     };

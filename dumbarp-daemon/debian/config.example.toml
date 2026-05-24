@@ -1,0 +1,5 @@
+# /etc/dumbarpd.toml — example
+listen = "0.0.0.0:1028"
+auth_token = ""
+refresh_interval_secs = 60
+ifaces = []

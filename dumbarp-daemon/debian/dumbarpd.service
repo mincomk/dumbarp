@@ -1,0 +1,25 @@
+[Unit]
+Description=dumbarp XDP ARP responder daemon
+Documentation=https://github.com/mincomk/dumbarp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dumbarpd --config /etc/dumbarpd.toml
+Restart=on-failure
+RestartSec=5s
+LimitMEMLOCK=infinity
+
+Environment=RUST_LOG=info
+
+ProtectHome=true
+ProtectKernelLogs=true
+PrivateTmp=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

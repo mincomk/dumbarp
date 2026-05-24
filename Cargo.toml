@@ -3,7 +3,7 @@ resolver = "2"
 members = ["dhcp-lease-read",
     "dumbarp",
     "dumbarp-common", "dumbarp-daemon",
-    "dumbarp-ebpf",
+    "dumbarp-ebpf", "dumbarp-k8s",
 ]
 default-members = ["dumbarp", "dumbarp-common"]
 

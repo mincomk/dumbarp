@@ -1,0 +1,8 @@
+target/
+.git/
+.github/
+.direnv/
+.claude/
+*.deb
+dumbarp-k8s/manifests/
+**/*.md

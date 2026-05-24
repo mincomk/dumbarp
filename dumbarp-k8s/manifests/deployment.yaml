@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dumbarp-k8s
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: dumbarp-k8s
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dumbarp-k8s
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dumbarp-k8s
+    spec:
+      serviceAccountName: dumbarp-k8s
+      containers:
+        - name: dumbarp-k8s
+          image: ghcr.io/REPLACE_ME/dumbarp-k8s:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/etc/dumbarp-k8s/config.toml
+          env:
+            - name: RUST_LOG
+              value: info
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dumbarp-k8s
+              readOnly: true
+            - name: tokens
+              mountPath: /etc/dumbarp-k8s/secrets
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: dumbarp-k8s-config
+        - name: tokens
+          secret:
+            secretName: dumbarp-k8s-tokens

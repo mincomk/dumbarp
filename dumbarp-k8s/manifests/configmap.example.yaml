@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dumbarp-k8s-config
+  namespace: kube-system
+data:
+  config.toml: |
+    refresh_interval_secs = 30
+    stale_after_secs      = 300
+
+    [[hosts]]
+    name            = "homelab"
+    url             = "http://10.0.0.5:1028"
+    auth_token_file = "/etc/dumbarp-k8s/secrets/homelab"
+
+    [[hosts]]
+    name            = "edge"
+    url             = "http://10.0.0.6:1028"
+    auth_token_file = "/etc/dumbarp-k8s/secrets/edge"

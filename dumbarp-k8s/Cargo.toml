@@ -1,0 +1,22 @@
+[package]
+name = "dumbarp-k8s"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+futures = "0.3.32"
+k8s-openapi = { version = "0.27.1", features = ["v1_33"] }
+kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "runtime", "rustls-tls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { workspace = true, features = ["full"] }
+toml = "1.1.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+url = { version = "2.5.8", features = ["serde"] }

@@ -20,7 +20,7 @@ spec:
       serviceAccountName: dumbarp-k8s
       containers:
         - name: dumbarp-k8s
-          image: ghcr.io/REPLACE_ME/dumbarp-k8s:latest
+          image: ghcr.io/mincomk/dumbarp-k8s:latest
           imagePullPolicy: IfNotPresent
           args:
             - --config=/etc/dumbarp-k8s/config.toml

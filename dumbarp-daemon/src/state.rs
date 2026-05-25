@@ -5,11 +5,14 @@ use std::sync::Arc;
 use dumbarp::Dumbarp;
 use tokio::sync::Mutex;
 
+use crate::lease::LeaseInfo;
+use crate::routing::RouteSpec;
+
 #[derive(Clone)]
 pub struct AppState {
     pub auth_token: Arc<str>,
     pub engine: Arc<Mutex<Dumbarp>>,
-    pub leases: Arc<Mutex<BTreeMap<String, Ipv4Addr>>>,
+    pub leases: Arc<Mutex<BTreeMap<String, LeaseInfo>>>,
 }
 
 impl AppState {
@@ -22,6 +25,19 @@ impl AppState {
     }
 
     pub async fn current_ips(&self) -> Vec<Ipv4Addr> {
-        self.leases.lock().await.values().copied().collect()
+        self.leases.lock().await.values().map(|l| l.ip).collect()
+    }
+
+    pub async fn current_routes(&self) -> Vec<RouteSpec> {
+        self.leases
+            .lock()
+            .await
+            .iter()
+            .map(|(iface, l)| RouteSpec {
+                src: l.ip,
+                gateway: l.gateway,
+                iface: iface.clone(),
+            })
+            .collect()
     }
 }

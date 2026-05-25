@@ -12,6 +12,8 @@ pub struct Config {
     #[serde(default = "default_refresh")]
     pub refresh_interval_secs: u64,
     pub ifaces: Vec<String>,
+    #[serde(default = "default_manage_routing")]
+    pub manage_routing: bool,
 }
 
 fn default_listen() -> SocketAddr {
@@ -20,6 +22,10 @@ fn default_listen() -> SocketAddr {
 
 fn default_refresh() -> u64 {
     60
+}
+
+fn default_manage_routing() -> bool {
+    true
 }
 
 impl Config {

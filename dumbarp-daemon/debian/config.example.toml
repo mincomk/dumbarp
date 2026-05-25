@@ -3,3 +3,6 @@ listen = "0.0.0.0:1028"
 auth_token = ""
 refresh_interval_secs = 60
 ifaces = []
+# Configure Linux source-based routing for each leased IP (rule + onlink route
+# via the DHCP-supplied gateway). Set to false to disable.
+manage_routing = true

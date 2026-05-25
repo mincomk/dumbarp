@@ -2,9 +2,11 @@ mod config;
 mod http;
 mod lease;
 mod refresh;
+mod routing;
 mod state;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
@@ -12,6 +14,7 @@ use dumbarp::Dumbarp;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
+use crate::routing::RouteManager;
 use crate::state::AppState;
 
 #[derive(Parser)]
@@ -33,11 +36,18 @@ async fn main() -> anyhow::Result<()> {
     let engine = Dumbarp::new()?;
     let state = AppState::new(cfg.auth_token, engine);
 
-    refresh::populate_once(&state, &cfg.ifaces).await;
+    let router = if cfg.manage_routing {
+        Some(Arc::new(RouteManager::new()?))
+    } else {
+        None
+    };
+
+    refresh::populate_once(&state, &cfg.ifaces, router.as_ref()).await;
     refresh::spawn(
         state.clone(),
         cfg.ifaces.clone(),
         Duration::from_secs(cfg.refresh_interval_secs),
+        router,
     );
 
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;

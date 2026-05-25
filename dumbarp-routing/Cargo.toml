@@ -1,0 +1,13 @@
+[package]
+name = "dumbarp-routing"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures = "0.3"
+netlink-packet-route = "0.30.0"
+rtnetlink = "0.21.0"
+tokio = { workspace = true, features = ["rt"] }
+tracing = "0.1"

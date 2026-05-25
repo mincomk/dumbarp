@@ -2,7 +2,6 @@ mod config;
 mod http;
 mod lease;
 mod refresh;
-mod routing;
 mod state;
 
 use std::path::PathBuf;
@@ -13,8 +12,9 @@ use clap::Parser;
 use dumbarp::Dumbarp;
 use tracing_subscriber::EnvFilter;
 
+use dumbarp_routing::RouteManager;
+
 use crate::config::Config;
-use crate::routing::RouteManager;
 use crate::state::AppState;
 
 #[derive(Parser)]

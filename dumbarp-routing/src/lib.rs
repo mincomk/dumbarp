@@ -35,24 +35,31 @@ impl RouteManager {
 
     pub async fn reconcile(&self, desired: &[RouteSpec]) -> anyhow::Result<()> {
         // Resolve ifname -> ifindex once per reconcile, dropping specs we can't resolve.
+        let mut ifindex_cache: HashMap<String, u32> = HashMap::new();
         let mut resolved: HashMap<u32, ResolvedSpec> = HashMap::new();
         for spec in desired {
-            match self.ifindex(&spec.iface).await {
-                Ok(ifindex) => {
-                    let table = table_id_for(spec.src);
-                    resolved.insert(
-                        table,
-                        ResolvedSpec {
-                            src: spec.src,
-                            gateway: spec.gateway,
-                            ifindex,
-                        },
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(iface = %spec.iface, %err, "ifindex lookup failed; skipping");
-                }
-            }
+            let ifindex = match ifindex_cache.get(&spec.iface).copied() {
+                Some(idx) => idx,
+                None => match self.ifindex(&spec.iface).await {
+                    Ok(idx) => {
+                        ifindex_cache.insert(spec.iface.clone(), idx);
+                        idx
+                    }
+                    Err(err) => {
+                        tracing::warn!(iface = %spec.iface, %err, "ifindex lookup failed; skipping");
+                        continue;
+                    }
+                },
+            };
+            let table = table_id_for(spec.src);
+            resolved.insert(
+                table,
+                ResolvedSpec {
+                    src: spec.src,
+                    gateway: spec.gateway,
+                    ifindex,
+                },
+            );
         }
 
         let current_rules = self.list_rules().await?;
@@ -255,7 +262,7 @@ impl ParsedRoute {
 
 // Table IDs 0, 253 (default), 254 (main), 255 (local) are reserved by the
 // kernel; nudge collisions away from those four values.
-fn table_id_for(ip: Ipv4Addr) -> u32 {
+pub fn table_id_for(ip: Ipv4Addr) -> u32 {
     let raw = u32::from(ip);
     match raw {
         0 | 253 | 254 | 255 => raw.wrapping_add(0x1_0000),

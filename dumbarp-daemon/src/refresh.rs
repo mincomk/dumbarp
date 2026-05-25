@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use tokio::time::{MissedTickBehavior, interval};
 
+use dumbarp_routing::RouteManager;
+
 use crate::lease::{self, LeaseInfo};
-use crate::routing::RouteManager;
 use crate::state::AppState;
 
 pub async fn populate_once(

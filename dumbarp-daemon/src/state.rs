@@ -5,8 +5,9 @@ use std::sync::Arc;
 use dumbarp::Dumbarp;
 use tokio::sync::Mutex;
 
+use dumbarp_routing::RouteSpec;
+
 use crate::lease::LeaseInfo;
-use crate::routing::RouteSpec;
 
 #[derive(Clone)]
 pub struct AppState {

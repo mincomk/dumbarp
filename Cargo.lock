@@ -693,6 +693,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dumbarp-gateway"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dumbarp-routing",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "dumbarp-k8s"
 version = "0.1.0"
 dependencies = [
@@ -714,6 +732,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dumbarp-routing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "netlink-packet-route",
+ "rtnetlink",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "dumbarpd"
 version = "0.1.0"
 dependencies = [
@@ -722,9 +752,7 @@ dependencies = [
  "clap",
  "dhcp-lease-read",
  "dumbarp",
- "futures",
- "netlink-packet-route",
- "rtnetlink",
+ "dumbarp-routing",
  "serde",
  "serde_json",
  "tokio",

@@ -1,0 +1,24 @@
+[Unit]
+Description=dumbarp gateway source-route reconciler
+Documentation=https://github.com/mincomk/dumbarp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dumbarp-gateway --config /etc/dumbarp-gateway.toml
+Restart=on-failure
+RestartSec=5s
+
+Environment=RUST_LOG=info
+
+ProtectHome=true
+ProtectKernelLogs=true
+PrivateTmp=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+[package]
+name = "dumbarp-gateway"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+dumbarp-routing = { version = "0.1.0", path = "../dumbarp-routing" }
+futures = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { workspace = true, features = ["full"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2", features = ["serde"] }
+
+[package.metadata.deb]
+name = "dumbarp-gateway"
+maintainer = "Allen <mail@drchi.co.kr>"
+copyright = "2026, Allen"
+license-file = "../LICENSE-MIT"
+extended-description = "Gateway-side reconciler that installs source-based routes for IPs leased by dumbarp daemons."
+depends = "$auto"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/dumbarp-gateway", "usr/bin/", "755"],
+    ["debian/config.example.toml", "etc/dumbarp-gateway.toml", "640"],
+]
+conf-files = ["/etc/dumbarp-gateway.toml"]
+maintainer-scripts = "debian/"
+systemd-units = { unit-name = "dumbarp-gateway", enable = true, start = true, restart-after-upgrade = true }

@@ -1,0 +1,13 @@
+# /etc/dumbarp-gateway.toml — example
+refresh_interval_secs = 30
+# Hold on to a daemon's last-known IP set for this many seconds when its
+# /leases fetch fails, so transient outages don't flap routes.
+stale_after_secs      = 300
+
+# Add one [[daemons]] block per dumbarpd instance this gateway should serve.
+# [[daemons]]
+# name        = "homelab"
+# endpoint    = "http://10.0.0.5:1028"
+# auth_token  = "REPLACE_ME"
+# nexthop     = "10.0.0.5"
+# device      = "br0"

@@ -22,9 +22,11 @@ jobs:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-musl
             deb_arch: amd64
+            musl_gcc: x86_64-linux-musl-gcc
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             deb_arch: arm64
+            musl_gcc: aarch64-linux-musl-gcc
     runs-on: ${{ matrix.arch.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +50,12 @@ jobs:
             sed -i "0,/^version = .*/s//version = \"${{ steps.ver.outputs.version }}\"/" "$f"
             grep -m1 '^version' "$f"
           done
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          sudo ln -sf "$(command -v musl-gcc)" /usr/local/bin/${{ matrix.arch.musl_gcc }}
 
       - name: Install Rust toolchains
         run: |

@@ -1,6 +1,8 @@
 mod config;
+mod dhcp;
 mod http;
 mod lease;
+mod neigh;
 mod refresh;
 mod state;
 
@@ -42,10 +44,13 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    refresh::populate_once(&state, &cfg.ifaces, router.as_ref()).await;
-    refresh::spawn(
+    dhcp::spawn_all(
         state.clone(),
         cfg.ifaces.clone(),
+        Duration::from_secs(cfg.neigh_refresh_interval_secs),
+    );
+    refresh::spawn(
+        state.clone(),
         Duration::from_secs(cfg.refresh_interval_secs),
         router,
     );

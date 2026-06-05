@@ -21,7 +21,6 @@ pub const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
 pub const MANAGED_BY_VALUE: &str = "dumbarp-k8s";
 pub const IP_ANNOTATION: &str = "dumbarp.k8s/ip";
 pub const LAST_SEEN_ANNOTATION: &str = "dumbarp.k8s/last-seen-at";
-const FIELD_MANAGER: &str = "dumbarp-k8s";
 
 pub fn spawn(cfg: Arc<Config>, http: reqwest::Client, kube: kube::Client) {
     tokio::spawn(async move {
@@ -229,7 +228,7 @@ async fn touch_pool(
     });
     api.patch(
         &pool_name(ip),
-        &PatchParams::apply(FIELD_MANAGER).force(),
+        &PatchParams::default(),
         &Patch::Merge(&patch),
     )
     .await?;

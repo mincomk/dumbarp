@@ -1,7 +1,8 @@
 use anyhow::Context;
+use serde::de::DeserializeOwned;
 use url::Url;
 
-use crate::{Leases, LeasesResponse};
+use crate::{DaemonRoutes, DaemonsResponse, Leases, LeasesResponse};
 
 pub async fn fetch_leases(
     http: &reqwest::Client,
@@ -9,9 +10,29 @@ pub async fn fetch_leases(
     token: &str,
     label: &str,
 ) -> anyhow::Result<Leases> {
+    let body: LeasesResponse = get_json(http, endpoint, "leases", token).await?;
+    body.parse(label)
+}
+
+pub async fn fetch_daemons(
+    http: &reqwest::Client,
+    endpoint: &Url,
+    token: &str,
+    label: &str,
+) -> anyhow::Result<Vec<DaemonRoutes>> {
+    let body: DaemonsResponse = get_json(http, endpoint, "daemons", token).await?;
+    body.parse(label)
+}
+
+async fn get_json<T: DeserializeOwned>(
+    http: &reqwest::Client,
+    endpoint: &Url,
+    path: &str,
+    token: &str,
+) -> anyhow::Result<T> {
     let url = endpoint
-        .join("leases")
-        .with_context(|| format!("building /leases URL from {endpoint}"))?;
+        .join(path)
+        .with_context(|| format!("building /{path} URL from {endpoint}"))?;
     let resp = http
         .get(url.clone())
         .bearer_auth(token)
@@ -20,9 +41,7 @@ pub async fn fetch_leases(
         .with_context(|| format!("GET {url}"))?
         .error_for_status()
         .with_context(|| format!("GET {url} returned non-success"))?;
-    let body: LeasesResponse = resp
-        .json()
+    resp.json()
         .await
-        .with_context(|| format!("decoding JSON from {url}"))?;
-    body.parse(label)
+        .with_context(|| format!("decoding JSON from {url}"))
 }

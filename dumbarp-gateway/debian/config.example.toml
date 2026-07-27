@@ -4,6 +4,13 @@ refresh_interval_secs = 30
 # /leases fetch fails, so transient outages don't flap routes.
 stale_after_secs      = 300
 
+# Optional: expose the resolved daemon list over HTTP so dumbarp-routerd
+# instances can learn it from here instead of repeating it on every router.
+# Omit this section entirely to keep the gateway poll-only with no listener.
+# [serve]
+# listen     = "0.0.0.0:1029"
+# auth_token = "REPLACE_ME"
+
 # Add one [[daemons]] block per dumbarpd instance this gateway should serve.
 # [[daemons]]
 # name        = "homelab"

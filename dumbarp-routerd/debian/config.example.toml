@@ -1,11 +1,23 @@
 # /etc/dumbarp-routerd.toml — example
 refresh_interval_secs = 30
-# Hold on to a daemon's last-known IP set for this many seconds when its
-# /leases fetch fails, so transient outages don't flap routes.
+# Hold on to the last-known daemon set for this many seconds when a fetch
+# fails, so transient outages don't flap routes.
 stale_after_secs      = 300
 
-# Add one [[daemons]] block per dumbarpd instance this router should serve.
-# The daemon's DSCP identity is learned from /leases, not configured here.
+# Set EITHER [gateway] or [[daemons]], not both.
+
+# Preferred: learn the daemon list from a dumbarp-gateway that has [serve]
+# enabled, so this router needs no per-daemon config at all.
+[gateway]
+endpoint   = "http://10.0.0.1:1029"
+auth_token = "REPLACE_ME"
+# Only needed where this router's interface naming differs from what the
+# gateway advertises. Keyed by daemon name.
+# [gateway.device_overrides]
+# homelab = "eno1"
+
+# Alternative: poll each daemon directly. The daemon's DSCP identity is still
+# learned from /leases, not configured here.
 # [[daemons]]
 # name        = "homelab"
 # endpoint    = "http://10.0.0.5:1028"

@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
 
 use anyhow::{Context, anyhow};
@@ -13,6 +13,15 @@ pub struct Config {
     #[serde(default = "default_stale")]
     pub stale_after_secs: u64,
     pub daemons: Vec<DaemonEntry>,
+    #[serde(default)]
+    pub serve: Option<ServeConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ServeConfig {
+    #[serde(default = "default_listen")]
+    pub listen: SocketAddr,
+    pub auth_token: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -30,6 +39,10 @@ fn default_refresh() -> u64 {
 
 fn default_stale() -> u64 {
     300
+}
+
+fn default_listen() -> SocketAddr {
+    "0.0.0.0:1029".parse().unwrap()
 }
 
 impl Config {
@@ -72,6 +85,11 @@ impl Config {
             if !seen.insert(d.name.as_str()) {
                 return Err(anyhow!("config: duplicate daemon name `{}`", d.name));
             }
+        }
+        if let Some(serve) = &cfg.serve
+            && serve.auth_token.is_empty()
+        {
+            return Err(anyhow!("config: `[serve].auth_token` must be non-empty"));
         }
         Ok(cfg)
     }

@@ -1,5 +1,6 @@
 mod client;
 mod config;
+mod http;
 mod reconcile;
 
 use std::path::PathBuf;
@@ -45,9 +46,28 @@ async fn main() -> anyhow::Result<()> {
     if let Err(err) = reconcile::reconcile_once(&cfg, &http, &router, &state).await {
         tracing::error!(%err, "initial reconcile failed");
     }
-    reconcile::spawn(cfg, http, router, state);
+    reconcile::spawn(cfg.clone(), http, router, state.clone());
 
-    tokio::signal::ctrl_c().await?;
+    match cfg.serve.clone() {
+        Some(serve) => {
+            let listener = tokio::net::TcpListener::bind(serve.listen).await?;
+            tracing::info!(addr = %serve.listen, "serving /daemons");
+            let serve_state = crate::http::ServeState {
+                cfg,
+                state,
+                auth_token: Arc::from(serve.auth_token),
+            };
+            axum::serve(listener, crate::http::router(serve_state))
+                .with_graceful_shutdown(async {
+                    let _ = tokio::signal::ctrl_c().await;
+                })
+                .await?;
+        }
+        None => {
+            tokio::signal::ctrl_c().await?;
+        }
+    }
+
     tracing::info!("shutting down");
     Ok(())
 }

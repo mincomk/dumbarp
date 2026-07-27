@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::path::Path;
 
@@ -12,8 +12,19 @@ pub struct Config {
     pub refresh_interval_secs: u64,
     #[serde(default = "default_stale")]
     pub stale_after_secs: u64,
+    #[serde(default)]
     pub daemons: Vec<DaemonEntry>,
+    #[serde(default)]
+    pub gateway: Option<GatewayEntry>,
     pub dscp: DscpConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct GatewayEntry {
+    pub endpoint: Url,
+    pub auth_token: String,
+    #[serde(default)]
+    pub device_overrides: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -55,8 +66,23 @@ impl Config {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
-        if self.daemons.is_empty() {
-            return Err(anyhow!("config: `daemons` must list at least one entry"));
+        match (&self.gateway, self.daemons.is_empty()) {
+            (Some(_), false) => {
+                return Err(anyhow!(
+                    "config: set either `[gateway]` or `[[daemons]]`, not both"
+                ));
+            }
+            (None, true) => {
+                return Err(anyhow!(
+                    "config: set either `[gateway]` (learn daemons from a dumbarp-gateway) or `[[daemons]]`"
+                ));
+            }
+            _ => {}
+        }
+        if let Some(gw) = &self.gateway
+            && gw.auth_token.is_empty()
+        {
+            return Err(anyhow!("config: `[gateway].auth_token` must be non-empty"));
         }
         if self.refresh_interval_secs == 0 {
             return Err(anyhow!("config: `refresh_interval_secs` must be > 0"));
@@ -152,5 +178,47 @@ device = "br0"
     fn rejects_duplicate_daemon_names() {
         let raw = format!("{BASE}{BASE}\n[dscp]\nifaces = [\"eth1\"]\n");
         assert!(load_str(&raw).is_err());
+    }
+
+    const GATEWAY: &str = r#"
+[gateway]
+endpoint = "http://10.0.0.1:1029"
+auth_token = "t"
+"#;
+
+    #[test]
+    fn accepts_gateway_mode() {
+        let cfg = load_str(&format!("{GATEWAY}\n[dscp]\nifaces = [\"eth1\"]\n")).unwrap();
+        let gw = cfg.gateway.unwrap();
+        assert_eq!(gw.auth_token, "t");
+        assert!(gw.device_overrides.is_empty());
+        assert!(cfg.daemons.is_empty());
+    }
+
+    #[test]
+    fn accepts_gateway_mode_with_device_overrides() {
+        let raw = format!(
+            "{GATEWAY}\n[gateway.device_overrides]\nhomelab = \"eno1\"\n\n[dscp]\nifaces = [\"eth1\"]\n"
+        );
+        let cfg = load_str(&raw).unwrap();
+        let gw = cfg.gateway.unwrap();
+        assert_eq!(gw.device_overrides.get("homelab").map(String::as_str), Some("eno1"));
+    }
+
+    #[test]
+    fn rejects_both_gateway_and_daemons() {
+        let raw = format!("{BASE}{GATEWAY}\n[dscp]\nifaces = [\"eth1\"]\n");
+        assert!(load_str(&raw).is_err());
+    }
+
+    #[test]
+    fn rejects_neither_gateway_nor_daemons() {
+        assert!(load_str("[dscp]\nifaces = [\"eth1\"]\n").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_gateway_token() {
+        let raw = "[gateway]\nendpoint = \"http://10.0.0.1:1029\"\nauth_token = \"\"\n\n[dscp]\nifaces = [\"eth1\"]\n";
+        assert!(load_str(raw).is_err());
     }
 }

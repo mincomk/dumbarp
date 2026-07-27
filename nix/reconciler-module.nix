@@ -1,10 +1,12 @@
-# Shared NixOS module factory for the two poll-and-reconcile services,
-# `dumbarp-gateway` and `dumbarp-routerd`. They differ only in the `[dscp]`
-# section and the privileges the eBPF datapath needs.
+# Shared NixOS module factory for the two poll-and-reconcile services.
+#
+#   variant = "gateway"  → polls daemons, optionally serves /daemons over HTTP
+#   variant = "routerd"  → installs routes plus the DSCP eBPF datapath, and
+#                          takes its daemon list either from a gateway or directly
 {
   serviceName,
   description,
-  dscp ? false,
+  variant,
 }:
 
 {
@@ -18,14 +20,50 @@ let
   cfg = config.services.${serviceName};
   tomlFormat = pkgs.formats.toml { };
 
+  isRouterd = variant == "routerd";
+  isGateway = variant == "gateway";
+
   configFileName = "${serviceName}.toml";
   runtimeConfigPath = "/run/${serviceName}/${configFileName}";
 
-  placeholderFor = i: "@DUMBARP_TOKEN_${toString i}@";
-  credentialFor = i: "token_${toString i}";
+  # Every secret that must be substituted at start-up, from all sources.
+  daemonSecrets = lib.concatLists (
+    lib.imap0 (
+      i: d:
+      lib.optional (d.authTokenFile != null) {
+        id = "token_${toString i}";
+        placeholder = "@DUMBARP_TOKEN_${toString i}@";
+        file = d.authTokenFile;
+      }
+    ) cfg.daemons
+  );
 
-  useFileSecret = lib.any (d: d.authTokenFile != null) cfg.daemons;
+  serveSecret = lib.optional (isGateway && cfg.serve != null && cfg.serve.authTokenFile != null) {
+    id = "serve_token";
+    placeholder = "@DUMBARP_SERVE_TOKEN@";
+    file = cfg.serve.authTokenFile;
+  };
+
+  upstreamSecret =
+    lib.optional (isRouterd && cfg.gateway != null && cfg.gateway.authTokenFile != null)
+      {
+        id = "gateway_token";
+        placeholder = "@DUMBARP_GATEWAY_TOKEN@";
+        file = cfg.gateway.authTokenFile;
+      };
+
+  secrets = daemonSecrets ++ serveSecret ++ upstreamSecret;
+  useFileSecret = secrets != [ ];
   configPath = if useFileSecret then runtimeConfigPath else "/etc/${configFileName}";
+
+  tokenValue =
+    placeholder: attrs:
+    if attrs.authTokenFile != null then
+      placeholder
+    else if attrs.authToken != null then
+      attrs.authToken
+    else
+      "";
 
   daemonSettings = lib.imap0 (
     i: d:
@@ -36,13 +74,7 @@ let
         nexthop
         device
         ;
-      auth_token =
-        if d.authTokenFile != null then
-          placeholderFor i
-        else if d.authToken != null then
-          d.authToken
-        else
-          "";
+      auth_token = tokenValue "@DUMBARP_TOKEN_${toString i}@" d;
     }
     // d.extraConfig
   ) cfg.daemons;
@@ -51,9 +83,24 @@ let
     {
       refresh_interval_secs = cfg.refreshIntervalSecs;
       stale_after_secs = cfg.staleAfterSecs;
+    }
+    // lib.optionalAttrs (cfg.daemons != [ ]) {
       daemons = daemonSettings;
     }
-    // lib.optionalAttrs dscp {
+    // lib.optionalAttrs (isGateway && cfg.serve != null) {
+      serve = {
+        listen = cfg.serve.listen;
+        auth_token = tokenValue "@DUMBARP_SERVE_TOKEN@" cfg.serve;
+      };
+    }
+    // lib.optionalAttrs (isRouterd && cfg.gateway != null) {
+      gateway = {
+        endpoint = cfg.gateway.endpoint;
+        auth_token = tokenValue "@DUMBARP_GATEWAY_TOKEN@" cfg.gateway;
+        device_overrides = cfg.gateway.deviceOverrides;
+      };
+    }
+    // lib.optionalAttrs isRouterd {
       dscp = {
         ifaces = cfg.dscp.ifaces;
         max_flows = cfg.dscp.maxFlows;
@@ -66,25 +113,38 @@ let
   renderConfig = pkgs.writeShellScript "${serviceName}-render-config" ''
     set -eu
     ${pkgs.coreutils}/bin/install -m 0640 ${baseConfigFile} ${runtimeConfigPath}
-    ${lib.concatStrings (
-      lib.imap0 (
-        i: d:
-        lib.optionalString (d.authTokenFile != null) ''
-          token=$(cat "$CREDENTIALS_DIRECTORY/${credentialFor i}")
-          # Escape backslashes then double quotes for safe TOML string embedding.
-          escaped=$(printf '%s' "$token" \
-            | ${pkgs.gnused}/bin/sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
-          ${pkgs.gnused}/bin/sed -i "s|${placeholderFor i}|$escaped|g" ${runtimeConfigPath}
-        ''
-      ) cfg.daemons
-    )}
+    ${lib.concatMapStrings (s: ''
+      token=$(cat "$CREDENTIALS_DIRECTORY/${s.id}")
+      # Escape backslashes then double quotes for safe TOML string embedding.
+      escaped=$(printf '%s' "$token" \
+        | ${pkgs.gnused}/bin/sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+      ${pkgs.gnused}/bin/sed -i "s|${s.placeholder}|$escaped|g" ${runtimeConfigPath}
+    '') secrets}
   '';
 
-  loadCredentials = lib.concatLists (
-    lib.imap0 (
-      i: d: lib.optional (d.authTokenFile != null) "${credentialFor i}:${d.authTokenFile}"
-    ) cfg.daemons
-  );
+  loadCredentials = map (s: "${s.id}:${s.file}") secrets;
+
+  tokenOptions = subject: {
+    authToken = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        ${subject} Written into the config file in the Nix store — readable by
+        any local user. Prefer the matching `authTokenFile` for production; if
+        both are set, the file wins.
+      '';
+    };
+
+    authTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        ${subject} Loaded via systemd {option}`LoadCredential` and substituted
+        into a runtime config under {file}`/run/${serviceName}/`, keeping the
+        token out of the Nix store.
+      '';
+    };
+  };
 
   daemonType = lib.types.submodule {
     options = {
@@ -97,27 +157,6 @@ let
         type = lib.types.str;
         example = "http://10.0.0.5:1028";
         description = "Base URL of the dumbarpd instance's REST API.";
-      };
-
-      authToken = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = ''
-          Bearer token for this daemon's API. Written into the config file in the
-          Nix store — readable by any local user. Prefer {option}`authTokenFile`
-          for production. If both are set, {option}`authTokenFile` wins.
-        '';
-      };
-
-      authTokenFile = lib.mkOption {
-        type = lib.types.nullOr lib.types.path;
-        default = null;
-        example = "/run/secrets/dumbarp-homelab-token";
-        description = ''
-          Path to a file containing this daemon's bearer token. Loaded via systemd
-          {option}`LoadCredential` and substituted into a runtime config under
-          {file}`/run/${serviceName}/`. Keeps the token out of the Nix store.
-        '';
       };
 
       nexthop = lib.mkOption {
@@ -137,7 +176,43 @@ let
         default = { };
         description = "Extra keys merged into this daemon's TOML table.";
       };
-    };
+    }
+    // tokenOptions "Bearer token for this daemon's API.";
+  };
+
+  serveType = lib.types.submodule {
+    options = {
+      listen = lib.mkOption {
+        type = lib.types.str;
+        default = "0.0.0.0:1029";
+        description = "Address:port to serve the daemon list on.";
+      };
+    }
+    // tokenOptions "Bearer token clients must present to read `/daemons`.";
+  };
+
+  upstreamType = lib.types.submodule {
+    options = {
+      endpoint = lib.mkOption {
+        type = lib.types.str;
+        example = "http://10.0.0.1:1029";
+        description = "Base URL of the dumbarp-gateway serving the daemon list.";
+      };
+
+      deviceOverrides = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        example = {
+          homelab = "eno1";
+        };
+        description = ''
+          Per-daemon egress interface overrides, keyed by daemon name. Only
+          needed where this router's interface naming differs from what the
+          gateway advertises.
+        '';
+      };
+    }
+    // tokenOptions "Bearer token presented to the gateway.";
   };
 in
 {
@@ -156,15 +231,15 @@ in
     refreshIntervalSecs = lib.mkOption {
       type = lib.types.ints.positive;
       default = 30;
-      description = "How often to poll each daemon's `/leases` and reconcile routes.";
+      description = "How often to poll upstream and reconcile routes.";
     };
 
     staleAfterSecs = lib.mkOption {
       type = lib.types.ints.positive;
       default = 300;
       description = ''
-        Keep serving a daemon's last-known IP set for this long when its `/leases`
-        fetch fails, so transient outages don't flap routes. Must be at least
+        Keep serving the last-known result for this long when a fetch fails, so
+        transient outages don't flap routes. Must be at least
         {option}`refreshIntervalSecs`.
       '';
     };
@@ -172,7 +247,9 @@ in
     daemons = lib.mkOption {
       type = lib.types.listOf daemonType;
       default = [ ];
-      description = "The dumbarpd instances this service polls and installs routes for.";
+      description =
+        "The dumbarpd instances to poll directly."
+        + lib.optionalString isRouterd " Mutually exclusive with {option}`gateway`.";
     };
 
     extraConfig = lib.mkOption {
@@ -181,7 +258,34 @@ in
       description = "Extra keys merged into the rendered TOML config.";
     };
   }
-  // lib.optionalAttrs dscp {
+  // lib.optionalAttrs isGateway {
+    serve = lib.mkOption {
+      type = lib.types.nullOr serveType;
+      default = null;
+      description = ''
+        Expose the resolved daemon list over HTTP so {command}`dumbarp-routerd`
+        instances can learn it from here instead of repeating it on every
+        router. Leave null to keep the gateway poll-only with no listener.
+      '';
+    };
+
+    openFirewall = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Open the TCP port from {option}`serve.listen` in the firewall.";
+    };
+  }
+  // lib.optionalAttrs isRouterd {
+    gateway = lib.mkOption {
+      type = lib.types.nullOr upstreamType;
+      default = null;
+      description = ''
+        Learn the daemon list from a {command}`dumbarp-gateway` that has
+        {option}`serve` enabled, so this router needs no per-daemon config.
+        Mutually exclusive with {option}`daemons`.
+      '';
+    };
+
     dscp = {
       ifaces = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -212,10 +316,6 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = cfg.daemons != [ ];
-        message = "services.${serviceName}.daemons must list at least one entry.";
-      }
-      {
         assertion = cfg.staleAfterSecs >= cfg.refreshIntervalSecs;
         message = "services.${serviceName}.staleAfterSecs must be >= refreshIntervalSecs.";
       }
@@ -232,13 +332,38 @@ in
         message = "services.${serviceName}.daemons has duplicate `name` values.";
       }
     ]
-    ++ lib.optional dscp {
-      assertion = cfg.dscp.ifaces != [ ];
-      message = "services.${serviceName}.dscp.ifaces must list at least one interface.";
-    };
+    ++ lib.optionals isGateway [
+      {
+        assertion = cfg.daemons != [ ];
+        message = "services.${serviceName}.daemons must list at least one entry.";
+      }
+      {
+        assertion = cfg.serve == null || (cfg.serve.authToken != null) || (cfg.serve.authTokenFile != null);
+        message = "services.${serviceName}.serve: set either `authToken` or `authTokenFile`.";
+      }
+    ]
+    ++ lib.optionals isRouterd [
+      {
+        assertion = (cfg.gateway != null) != (cfg.daemons != [ ]);
+        message = "services.${serviceName}: set exactly one of `gateway` or `daemons`.";
+      }
+      {
+        assertion =
+          cfg.gateway == null || (cfg.gateway.authToken != null) || (cfg.gateway.authTokenFile != null);
+        message = "services.${serviceName}.gateway: set either `authToken` or `authTokenFile`.";
+      }
+      {
+        assertion = cfg.dscp.ifaces != [ ];
+        message = "services.${serviceName}.dscp.ifaces must list at least one interface.";
+      }
+    ];
 
     environment.etc = lib.mkIf (!useFileSecret) {
       "${configFileName}".source = baseConfigFile;
+    };
+
+    networking.firewall = lib.mkIf (isGateway && cfg.openFirewall && cfg.serve != null) {
+      allowedTCPPorts = [ (lib.toInt (lib.last (lib.splitString ":" cfg.serve.listen))) ];
     };
 
     systemd.services.${serviceName} = {
@@ -268,7 +393,7 @@ in
         RuntimeDirectory = serviceName;
         RuntimeDirectoryMode = "0750";
       }
-      // lib.optionalAttrs dscp {
+      // lib.optionalAttrs isRouterd {
         # The eBPF datapath needs unrestricted locked memory for map allocation.
         LimitMEMLOCK = "infinity";
         AmbientCapabilities = [
@@ -282,7 +407,7 @@ in
           "CAP_PERFMON"
         ];
       }
-      // lib.optionalAttrs (!dscp) {
+      // lib.optionalAttrs isGateway {
         AmbientCapabilities = [ "CAP_NET_ADMIN" ];
         CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
       }

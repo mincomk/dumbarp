@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
     let datapath = Datapath::load(&cfg.dscp.ifaces, cfg.dscp.max_flows)?;
     let state = Arc::new(RouterState {
         cache: Default::default(),
+        gateway_cache: Default::default(),
         datapath: Mutex::new(datapath),
     });
 

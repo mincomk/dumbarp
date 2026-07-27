@@ -5,13 +5,14 @@ use tokio::sync::Mutex;
 
 use crate::Leases;
 
-#[derive(Default)]
-pub struct LeaseCache {
-    cached: Mutex<HashMap<String, CachedEntry>>,
+pub type LeaseCache = Cache<Leases>;
+
+pub struct Cache<T> {
+    cached: Mutex<HashMap<String, CachedEntry<T>>>,
 }
 
-struct CachedEntry {
-    leases: Leases,
+struct CachedEntry<T> {
+    value: T,
     last_success: Instant,
 }
 
@@ -22,14 +23,22 @@ pub struct RoundStats {
     pub dropped: usize,
 }
 
-impl LeaseCache {
+impl<T> Default for Cache<T> {
+    fn default() -> Self {
+        Self {
+            cached: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<T: Clone> Cache<T> {
     pub async fn apply_round<I>(
         &self,
         results: I,
         stale_after: Duration,
-    ) -> (RoundStats, HashMap<String, Leases>)
+    ) -> (RoundStats, HashMap<String, T>)
     where
-        I: IntoIterator<Item = (String, anyhow::Result<Leases>)>,
+        I: IntoIterator<Item = (String, anyhow::Result<T>)>,
     {
         let now = Instant::now();
         let mut stats = RoundStats::default();
@@ -37,12 +46,12 @@ impl LeaseCache {
 
         for (name, result) in results {
             match result {
-                Ok(leases) => {
-                    tracing::debug!(daemon = %name, count = leases.ips.len(), "fetched");
+                Ok(value) => {
+                    tracing::debug!(source = %name, "fetched");
                     cached.insert(
                         name,
                         CachedEntry {
-                            leases,
+                            value,
                             last_success: now,
                         },
                     );
@@ -50,11 +59,11 @@ impl LeaseCache {
                 }
                 Err(err) => match cached.get(&name) {
                     Some(entry) if now.duration_since(entry.last_success) < stale_after => {
-                        tracing::warn!(daemon = %name, %err, "fetch failed; using cached IPs");
+                        tracing::warn!(source = %name, %err, "fetch failed; using cached value");
                         stats.used_cache += 1;
                     }
                     _ => {
-                        tracing::warn!(daemon = %name, %err, "fetch failed; no fresh cache, dropping");
+                        tracing::warn!(source = %name, %err, "fetch failed; no fresh cache, dropping");
                         cached.remove(&name);
                         stats.dropped += 1;
                     }
@@ -64,8 +73,17 @@ impl LeaseCache {
 
         let view = cached
             .iter()
-            .map(|(name, entry)| (name.clone(), entry.leases.clone()))
+            .map(|(name, entry)| (name.clone(), entry.value.clone()))
             .collect();
         (stats, view)
+    }
+
+    pub async fn snapshot(&self) -> HashMap<String, T> {
+        self.cached
+            .lock()
+            .await
+            .iter()
+            .map(|(name, entry)| (name.clone(), entry.value.clone()))
+            .collect()
     }
 }

@@ -8,7 +8,7 @@ edition.workspace = true
 anyhow.workspace = true
 chrono = { version = "0.4.44", features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
-dumbarp-api = { version = "0.1.0", path = "../dumbarp-api", features = ["client"] }
+dumbarp-api = { path = "../dumbarp-api", features = ["client"] }
 futures = "0.3.32"
 k8s-openapi = { version = "0.27.1", features = ["v1_33"] }
 kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "runtime", "rustls-tls"] }

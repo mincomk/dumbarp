@@ -725,6 +725,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dumbarp-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "dumbarp-common"
 version = "0.1.0"
 dependencies = [
@@ -748,6 +760,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dumbarp-api",
  "dumbarp-routing",
  "futures",
  "reqwest",
@@ -767,6 +780,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "dumbarp-api",
  "futures",
  "k8s-openapi",
  "kube",
@@ -779,6 +793,41 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "dumbarp-routerd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aya",
+ "aya-build",
+ "aya-log",
+ "cargo_metadata",
+ "clap",
+ "dumbarp-api",
+ "dumbarp-common",
+ "dumbarp-routerd-ebpf",
+ "dumbarp-routing",
+ "futures",
+ "reqwest",
+ "serde",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "dumbarp-routerd-ebpf"
+version = "0.1.0"
+dependencies = [
+ "aya-ebpf",
+ "aya-log-ebpf",
+ "dumbarp-common",
+ "network-types",
+ "which 6.0.3",
 ]
 
 [[package]]
@@ -801,6 +850,8 @@ dependencies = [
  "axum",
  "clap",
  "dumbarp",
+ "dumbarp-api",
+ "dumbarp-common",
  "dumbarp-routing",
  "futures",
  "libc",

@@ -19,6 +19,8 @@ tokio = { workspace = true, features = ["full"] }
 toml = "1.1.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+dumbarp-api = { version = "0.1.0", path = "../dumbarp-api" }
+dumbarp-common = { version = "0.1.0", path = "../dumbarp-common" }
 
 [package.metadata.deb]
 name = "dumbarpd"

@@ -35,8 +35,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load(&cli.config)?;
 
+    let dscp_id = cfg.dscp_id();
     let engine = Dumbarp::new()?;
-    let state = AppState::new(cfg.auth_token, engine);
+    let state = AppState::new(cfg.auth_token, engine, dscp_id);
 
     let router = if cfg.manage_routing {
         Some(Arc::new(RouteManager::new()?))

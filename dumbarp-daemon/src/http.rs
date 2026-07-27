@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use serde::Serialize;
+use dumbarp_api::LeasesResponse;
 
 use crate::state::AppState;
 
@@ -21,11 +21,6 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-#[derive(Serialize)]
-struct LeasesResponse {
-    ips: Vec<String>,
-}
-
 async fn leases_handler(State(state): State<AppState>) -> Json<LeasesResponse> {
     let ips = state
         .current_ips()
@@ -33,7 +28,10 @@ async fn leases_handler(State(state): State<AppState>) -> Json<LeasesResponse> {
         .into_iter()
         .map(|ip| ip.to_string())
         .collect();
-    Json(LeasesResponse { ips })
+    Json(LeasesResponse {
+        ips,
+        dumbarpd_id: state.dumbarpd_id,
+    })
 }
 
 async fn healthz_handler() -> &'static str {

@@ -6,3 +6,11 @@ ifaces = []
 # Configure Linux source-based routing for each leased IP (rule + onlink route
 # via the DHCP-supplied gateway). Set to false to disable.
 manage_routing = true
+
+# How often to re-probe and re-pin the gateway's permanent neighbour entry.
+neigh_refresh_interval_secs = 30
+
+# DSCP mode identity for this node, 1-63. Inbound traffic addressed to a leased
+# IP is stamped with this value in the DSCP field so dumbarp-routerd on the
+# router nodes can steer the flow's replies back here. 0 disables DSCP mode.
+dumbarpd_id = 0

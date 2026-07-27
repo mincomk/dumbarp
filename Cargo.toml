@@ -2,8 +2,10 @@
 resolver = "2"
 members = ["dhcp-lease-read",
     "dumbarp",
+    "dumbarp-api",
     "dumbarp-common", "dumbarp-daemon",
     "dumbarp-ebpf", "dumbarp-gateway", "dumbarp-k8s",
+    "dumbarp-routerd", "dumbarp-routerd-ebpf",
     "dumbarp-routing",
 ]
 default-members = ["dumbarp", "dumbarp-common"]
@@ -32,6 +34,11 @@ tokio = { version = "1.40.0", default-features = false }
 which = { version = "6.0.0", default-features = false }
 
 [profile.release.package.dumbarp-ebpf]
+debug = 2
+codegen-units = 1
+strip = false
+
+[profile.release.package.dumbarp-routerd-ebpf]
 debug = 2
 codegen-units = 1
 strip = false

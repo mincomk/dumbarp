@@ -1,5 +1,5 @@
 {
-  description = "dumbarp — XDP-based ARP responder daemon (dumbarpd)";
+  description = "dumbarp — XDP ARP responder (dumbarpd), route reconcilers (dumbarp-gateway, dumbarp-routerd)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -27,21 +27,29 @@
         "aarch64-linux"
       ];
 
+      packageNames = [
+        "dumbarpd"
+        "dumbarp-gateway"
+        "dumbarp-routerd"
+      ];
+
       perSystem = flake-utils.lib.eachSystem supportedSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           fenixPkgs = fenix.packages.${system};
 
-          dumbarpd = pkgs.callPackage ./nix/package.nix {
+          # callPackage adds `override`/`overrideDerivation` to the returned set;
+          # keep only the real derivations so `packages` and `checks` stay clean.
+          built = pkgs.callPackage ./nix/package.nix {
             inherit crane;
             fenix = fenixPkgs;
           };
+          dumbarpPackages = lib.genAttrs packageNames (name: built.${name});
         in
         {
-          packages = {
-            inherit dumbarpd;
-            default = dumbarpd;
+          packages = dumbarpPackages // {
+            default = dumbarpPackages.dumbarpd;
           };
 
           devShells.default =
@@ -52,10 +60,11 @@
               ];
             in
             pkgs.mkShell {
-              inputsFrom = [ dumbarpd ];
+              inputsFrom = lib.attrValues dumbarpPackages;
               packages = [
                 devToolchain
                 pkgs.bpf-linker
+                pkgs.bpftool
                 pkgs.cargo-deb
                 pkgs.pkg-config
                 fenixPkgs.rust-analyzer
@@ -65,21 +74,32 @@
               RUSTC_BOOTSTRAP = "1";
             };
 
-          checks = {
-            inherit dumbarpd;
-          };
+          checks = dumbarpPackages;
 
           formatter = pkgs.nixfmt-rfc-style;
         }
       );
+
+      lib = nixpkgs.lib;
     in
     perSystem
     // {
-      nixosModules.dumbarpd = import ./nix/module.nix;
-      nixosModules.default = self.nixosModules.dumbarpd;
+      nixosModules = {
+        dumbarpd = import ./nix/module.nix;
+        dumbarp-gateway = import ./nix/gateway-module.nix;
+        dumbarp-routerd = import ./nix/routerd-module.nix;
 
-      overlays.default = _final: prev: {
-        dumbarpd = self.packages.${prev.stdenv.hostPlatform.system}.dumbarpd;
+        default = {
+          imports = [
+            self.nixosModules.dumbarpd
+            self.nixosModules.dumbarp-gateway
+            self.nixosModules.dumbarp-routerd
+          ];
+        };
       };
+
+      overlays.default =
+        _final: prev:
+        lib.genAttrs packageNames (name: self.packages.${prev.stdenv.hostPlatform.system}.${name});
     };
 }

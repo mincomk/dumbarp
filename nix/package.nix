@@ -37,53 +37,72 @@ let
     ];
   };
 
-  commonArgs = {
-    inherit src cargoVendorDir;
+  # `ebpf` gates the bits only the aya-using crates need: bpf-linker on PATH,
+  # RUSTC_BOOTSTRAP for the nested `-Z build-std`, and AYA_BUILD_SKIP while
+  # caching deps (crane stubs sources, so the eBPF bin would be stubbed too and
+  # fail to compile for bpfel-unknown-none).
+  mkDumbarpPackage =
+    {
+      pname,
+      description,
+      ebpf ? false,
+    }:
+    let
+      commonArgs = {
+        inherit src cargoVendorDir pname;
+        version = "0.1.0";
+        strictDeps = true;
+
+        nativeBuildInputs = [ pkg-config ] ++ lib.optional ebpf bpf-linker;
+
+        cargoExtraArgs = "-p ${pname} --locked";
+
+        doCheck = false;
+      }
+      // lib.optionalAttrs ebpf {
+        RUSTC_BOOTSTRAP = "1";
+      };
+
+      cargoArtifacts = craneLib.buildDepsOnly (
+        commonArgs // lib.optionalAttrs ebpf { AYA_BUILD_SKIP = "1"; }
+      );
+    in
+    craneLib.buildPackage (
+      commonArgs
+      // {
+        inherit cargoArtifacts;
+
+        meta = {
+          inherit description;
+          homepage = "https://github.com/mincomk/dumbarp";
+          license = with lib.licenses; [
+            mit
+            asl20
+          ];
+          mainProgram = pname;
+          platforms = [
+            "x86_64-linux"
+            "aarch64-linux"
+          ];
+        };
+      }
+    );
+in
+{
+  dumbarpd = mkDumbarpPackage {
     pname = "dumbarpd";
-    version = "0.1.0";
-    strictDeps = true;
-
-    nativeBuildInputs = [
-      pkg-config
-      bpf-linker
-    ];
-
-    cargoExtraArgs = "-p dumbarpd --locked";
-
-    # Required so aya-build's nested cargo invocation can use `-Z build-std=core`
-    # against stable rustc. (aya-build also reads this flag to decide whether to
-    # add `-Z build-std` in the first place.)
-    RUSTC_BOOTSTRAP = "1";
-
-    doCheck = false;
+    description = "XDP-based ARP responder daemon with a REST control API";
+    ebpf = true;
   };
 
-  # Skip the eBPF build while caching deps — crane stubs sources, so the eBPF
-  # bin would be stubbed too and fail to compile for bpfel-unknown-none.
-  cargoArtifacts = craneLib.buildDepsOnly (
-    commonArgs
-    // {
-      AYA_BUILD_SKIP = "1";
-    }
-  );
-in
-craneLib.buildPackage (
-  commonArgs
-  // {
-    inherit cargoArtifacts;
+  dumbarp-gateway = mkDumbarpPackage {
+    pname = "dumbarp-gateway";
+    description = "Gateway-side reconciler that installs source-based routes for IPs leased by dumbarp daemons";
+  };
 
-    meta = {
-      description = "XDP-based ARP responder daemon with a REST control API";
-      homepage = "https://github.com/mincomk/dumbarp";
-      license = with lib.licenses; [
-        mit
-        asl20
-      ];
-      mainProgram = "dumbarpd";
-      platforms = [
-        "x86_64-linux"
-        "aarch64-linux"
-      ];
-    };
-  }
-)
+  dumbarp-routerd = mkDumbarpPackage {
+    pname = "dumbarp-routerd";
+    description = "Router-node reconciler: source-based routes plus the DSCP-mode eBPF datapath";
+    ebpf = true;
+  };
+}

@@ -14,14 +14,16 @@ pub struct AppState {
     pub auth_token: Arc<str>,
     pub engine: Arc<Mutex<Dumbarp>>,
     pub leases: Arc<Mutex<BTreeMap<String, LeaseInfo>>>,
+    pub dumbarpd_id: Option<u8>,
 }
 
 impl AppState {
-    pub fn new(auth_token: String, engine: Dumbarp) -> Self {
+    pub fn new(auth_token: String, engine: Dumbarp, dumbarpd_id: Option<u8>) -> Self {
         Self {
             auth_token: Arc::from(auth_token),
             engine: Arc::new(Mutex::new(engine)),
             leases: Arc::new(Mutex::new(BTreeMap::new())),
+            dumbarpd_id,
         }
     }
 
@@ -38,6 +40,7 @@ impl AppState {
                 src: l.ip,
                 gateway: l.gateway,
                 iface: iface.clone(),
+                fwmark: None,
             })
             .collect()
     }

@@ -1,0 +1,18 @@
+[package]
+name = "dumbarp-api"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+client = ["dep:reqwest", "dep:tokio", "dep:tracing", "dep:url"]
+
+[dependencies]
+anyhow.workspace = true
+serde = { version = "1.0.228", features = ["derive"] }
+
+reqwest = { version = "0.13.3", default-features = false, features = ["json"], optional = true }
+tokio = { workspace = true, features = ["sync"], optional = true }
+tracing = { version = "0.1.44", optional = true }
+url = { version = "2.5.8", features = ["serde"], optional = true }

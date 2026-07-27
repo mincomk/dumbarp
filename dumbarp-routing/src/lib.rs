@@ -19,6 +19,7 @@ pub struct RouteSpec {
     pub src: Ipv4Addr,
     pub gateway: Ipv4Addr,
     pub iface: String,
+    pub fwmark: Option<u32>,
 }
 
 pub struct RouteManager {
@@ -58,6 +59,7 @@ impl RouteManager {
                     src: spec.src,
                     gateway: spec.gateway,
                     ifindex,
+                    fwmark: spec.fwmark,
                 },
             );
         }
@@ -78,6 +80,7 @@ impl RouteManager {
             let matches = match (want, have_rule, have_route) {
                 (Some(w), Some(r), Some(rt)) => {
                     r.src == w.src
+                        && r.fwmark == w.fwmark
                         && rt.gateway == w.gateway
                         && rt.oif == w.ifindex
                         && rt.onlink
@@ -90,7 +93,7 @@ impl RouteManager {
             }
 
             if let Some(rule) = have_rule
-                && let Err(err) = self.del_rule(rule.src, table).await
+                && let Err(err) = self.del_rule(rule.src, table, rule.fwmark).await
             {
                 tracing::warn!(table, %err, "delete stale rule failed");
             }
@@ -101,7 +104,7 @@ impl RouteManager {
             }
 
             if let Some(w) = want {
-                if let Err(err) = self.add_rule(w.src, table).await {
+                if let Err(err) = self.add_rule(w.src, table, w.fwmark).await {
                     tracing::warn!(table, src = %w.src, %err, "add rule failed");
                     continue;
                 }
@@ -135,10 +138,10 @@ impl RouteManager {
         let mut out = HashMap::new();
         let mut stream = self.handle.rule().get(IpVersion::V4).execute();
         while let Some(msg) = stream.try_next().await? {
-            let Some((src, table)) = parse_dumbarp_rule(&msg) else {
+            let Some((src, table, fwmark)) = parse_dumbarp_rule(&msg) else {
                 continue;
             };
-            out.insert(table, CurrentRule { src });
+            out.insert(table, CurrentRule { src, fwmark });
         }
         Ok(out)
     }
@@ -156,22 +159,36 @@ impl RouteManager {
         Ok(out)
     }
 
-    async fn add_rule(&self, src: Ipv4Addr, table: u32) -> anyhow::Result<()> {
-        self.handle
+    async fn add_rule(
+        &self,
+        src: Ipv4Addr,
+        table: u32,
+        fwmark: Option<u32>,
+    ) -> anyhow::Result<()> {
+        let mut req = self
+            .handle
             .rule()
             .add()
             .v4()
             .source_prefix(src, 32)
             .table_id(table)
             .action(RuleAction::ToTable)
-            .priority(DUMBARP_PRIORITY)
-            .execute()
+            .priority(DUMBARP_PRIORITY);
+        if let Some(mark) = fwmark {
+            req = req.fw_mark(mark);
+        }
+        req.execute()
             .await
-            .with_context(|| format!("add rule src={src} table={table}"))?;
+            .with_context(|| format!("add rule src={src} table={table} fwmark={fwmark:?}"))?;
         Ok(())
     }
 
-    async fn del_rule(&self, src: Ipv4Addr, table: u32) -> anyhow::Result<()> {
+    async fn del_rule(
+        &self,
+        src: Ipv4Addr,
+        table: u32,
+        fwmark: Option<u32>,
+    ) -> anyhow::Result<()> {
         let mut msg = RuleMessage::default();
         msg.header.family = AddressFamily::Inet;
         msg.header.src_len = 32;
@@ -179,12 +196,15 @@ impl RouteManager {
         msg.attributes.push(RuleAttribute::Source(src.into()));
         msg.attributes.push(RuleAttribute::Table(table));
         msg.attributes.push(RuleAttribute::Priority(DUMBARP_PRIORITY));
+        if let Some(mark) = fwmark {
+            msg.attributes.push(RuleAttribute::FwMark(mark));
+        }
         self.handle
             .rule()
             .del(msg)
             .execute()
             .await
-            .with_context(|| format!("del rule src={src} table={table}"))?;
+            .with_context(|| format!("del rule src={src} table={table} fwmark={fwmark:?}"))?;
         Ok(())
     }
 
@@ -231,10 +251,12 @@ struct ResolvedSpec {
     src: Ipv4Addr,
     gateway: Ipv4Addr,
     ifindex: u32,
+    fwmark: Option<u32>,
 }
 
 struct CurrentRule {
     src: Ipv4Addr,
+    fwmark: Option<u32>,
 }
 
 struct CurrentRoute {
@@ -270,18 +292,20 @@ pub fn table_id_for(ip: Ipv4Addr) -> u32 {
     }
 }
 
-fn parse_dumbarp_rule(msg: &RuleMessage) -> Option<(Ipv4Addr, u32)> {
+fn parse_dumbarp_rule(msg: &RuleMessage) -> Option<(Ipv4Addr, u32, Option<u32>)> {
     if msg.header.family != AddressFamily::Inet {
         return None;
     }
     let mut priority = None;
     let mut src = None;
     let mut table_attr = None;
+    let mut fwmark = None;
     for attr in &msg.attributes {
         match attr {
             RuleAttribute::Priority(p) => priority = Some(*p),
             RuleAttribute::Source(std::net::IpAddr::V4(v4)) => src = Some(*v4),
             RuleAttribute::Table(t) => table_attr = Some(*t),
+            RuleAttribute::FwMark(m) => fwmark = Some(*m),
             _ => {}
         }
     }
@@ -293,7 +317,7 @@ fn parse_dumbarp_rule(msg: &RuleMessage) -> Option<(Ipv4Addr, u32)> {
         return None;
     }
     let table = table_attr.unwrap_or(msg.header.table as u32);
-    Some((src, table))
+    Some((src, table, fwmark.filter(|m| *m != 0)))
 }
 
 fn parse_dumbarp_route(msg: &RouteMessage) -> Option<ParsedRoute> {

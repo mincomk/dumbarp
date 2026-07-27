@@ -17,7 +17,10 @@ let
     refresh_interval_secs = cfg.refreshIntervalSecs;
     ifaces = cfg.ifaces;
     manage_routing = cfg.manageRouting;
-    auth_token = if useFileSecret then placeholder else (if cfg.authToken != null then cfg.authToken else "");
+    neigh_refresh_interval_secs = cfg.neighRefreshIntervalSecs;
+    dumbarpd_id = cfg.dumbarpdId;
+    auth_token =
+      if useFileSecret then placeholder else (if cfg.authToken != null then cfg.authToken else "");
   } cfg.extraConfig;
 
   baseConfigFile = tomlFormat.generate "dumbarpd.toml" settings;
@@ -48,7 +51,9 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.dumbarpd or (throw "services.dumbarpd: no `dumbarpd` package — set services.dumbarpd.package or add the flake overlay.");
+      default =
+        pkgs.dumbarpd
+          or (throw "services.dumbarpd: no `dumbarpd` package — set services.dumbarpd.package or add the flake overlay.");
       defaultText = lib.literalExpression "pkgs.dumbarpd";
       description = "The dumbarpd package to use.";
     };
@@ -97,6 +102,24 @@ in
       type = lib.types.bool;
       default = true;
       description = "Whether the daemon should manage source-based routing for leased IPs.";
+    };
+
+    neighRefreshIntervalSecs = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 30;
+      description = "How often to re-probe and re-pin the gateway's permanent neighbour entry.";
+    };
+
+    dumbarpdId = lib.mkOption {
+      type = lib.types.ints.between 0 63;
+      default = 0;
+      example = 7;
+      description = ''
+        DSCP mode identity for this node, 1–63. Inbound traffic addressed to a
+        leased IP is stamped with this value in the DSCP field so that
+        {command}`dumbarp-routerd` on the router nodes can steer the flow's
+        replies back here. `0` disables DSCP mode.
+      '';
     };
 
     openFirewall = lib.mkOption {

@@ -1,0 +1,27 @@
+[Unit]
+Description=dumbarp router-node reconciler and DSCP datapath
+Documentation=https://github.com/mincomk/dumbarp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dumbarp-routerd --config /etc/dumbarp-routerd.toml
+Restart=on-failure
+RestartSec=5s
+LimitMEMLOCK=infinity
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_PERFMON
+
+Environment=RUST_LOG=info
+
+ProtectHome=true
+ProtectKernelLogs=true
+PrivateTmp=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

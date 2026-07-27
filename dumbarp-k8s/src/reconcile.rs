@@ -114,7 +114,7 @@ async fn collect_desired(
 
     let mut desired = BTreeSet::new();
     let mut errors = 0usize;
-    for (host, result) in cfg.hosts.iter().zip(results.into_iter()) {
+    for (host, result) in cfg.hosts.iter().zip(results) {
         match result {
             Ok(ips) => {
                 tracing::debug!(host = %host.name, count = ips.len(), "fetched");

@@ -45,7 +45,7 @@ async fn run_dhcp_for_iface(state: AppState, iface: String, neigh_period: Durati
                     {
                         let mut engine = state.engine.lock().await;
                         let _ = engine.remove_interface(&iface);
-                        match engine.add_interface(&iface, ip) {
+                        match engine.add_interface(&iface, ip, state.dumbarpd_id) {
                             Ok(()) => {
                                 drop(engine);
                                 state.leases.lock().await.insert(iface.clone(), info);

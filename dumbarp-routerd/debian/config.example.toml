@@ -1,0 +1,22 @@
+# /etc/dumbarp-routerd.toml — example
+refresh_interval_secs = 30
+# Hold on to a daemon's last-known IP set for this many seconds when its
+# /leases fetch fails, so transient outages don't flap routes.
+stale_after_secs      = 300
+
+# Add one [[daemons]] block per dumbarpd instance this router should serve.
+# The daemon's DSCP identity is learned from /leases, not configured here.
+# [[daemons]]
+# name        = "homelab"
+# endpoint    = "http://10.0.0.5:1028"
+# auth_token  = "REPLACE_ME"
+# nexthop     = "10.0.0.5"
+# device      = "br0"
+
+[dscp]
+# Every interface the ingress program attaches to — both the daemon-facing
+# links and the links where reply traffic enters this router. The program
+# tells the two roles apart by packet content, so no per-iface role is needed.
+ifaces    = []
+# Size of the flow table. Fixed at load time; raise it for busy routers.
+max_flows = 65536

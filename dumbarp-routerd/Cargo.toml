@@ -1,0 +1,45 @@
+[package]
+name = "dumbarp-routerd"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+aya = { workspace = true }
+aya-log = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+dumbarp-api = { path = "../dumbarp-api", features = ["client"] }
+dumbarp-common = { path = "../dumbarp-common", features = ["user"] }
+dumbarp-routing = { path = "../dumbarp-routing" }
+futures = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { workspace = true, features = ["full"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2", features = ["serde"] }
+
+[build-dependencies]
+anyhow.workspace = true
+aya-build = { workspace = true }
+cargo_metadata = { workspace = true }
+dumbarp-routerd-ebpf = { path = "../dumbarp-routerd-ebpf" }
+
+[package.metadata.deb]
+name = "dumbarp-routerd"
+maintainer = "Allen <mail@drchi.co.kr>"
+copyright = "2026, Allen"
+license-file = "../LICENSE-MIT"
+extended-description = "Router-node reconciler: installs source-based routes for IPs leased by dumbarp daemons and runs the DSCP-mode eBPF datapath."
+depends = "$auto"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/dumbarp-routerd", "usr/bin/", "755"],
+    ["debian/config.example.toml", "etc/dumbarp-routerd.toml", "640"],
+]
+conf-files = ["/etc/dumbarp-routerd.toml"]
+maintainer-scripts = "debian/"
+systemd-units = { unit-name = "dumbarp-routerd", enable = true, start = true, restart-after-upgrade = true }

@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [dumbarpd, dumbarp-gateway]
+        package: [dumbarpd, dumbarp-gateway, dumbarp-routerd]
         arch:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-musl
@@ -46,7 +46,7 @@ jobs:
 
       - name: Sync Cargo.toml version
         run: |
-          for f in dumbarp-daemon/Cargo.toml dumbarp-gateway/Cargo.toml dumbarp-routing/Cargo.toml; do
+          for f in dumbarp-daemon/Cargo.toml dumbarp-gateway/Cargo.toml dumbarp-routerd/Cargo.toml dumbarp-routing/Cargo.toml dumbarp-api/Cargo.toml; do
             sed -i "0,/^version = .*/s//version = \"${{ steps.ver.outputs.version }}\"/" "$f"
             grep -m1 '^version' "$f"
           done
@@ -70,7 +70,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install bpf-linker
-        if: matrix.package == 'dumbarpd'
+        if: matrix.package == 'dumbarpd' || matrix.package == 'dumbarp-routerd'
         run: |
           which bpf-linker || cargo install bpf-linker --locked
 

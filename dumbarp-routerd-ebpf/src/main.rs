@@ -4,11 +4,12 @@
 use aya_ebpf::{
     bindings::TC_ACT_OK,
     macros::{classifier, map},
-    maps::{HashMap, LruHashMap},
+    maps::{HashMap, LruHashMap, PerCpuArray},
     programs::TcContext,
 };
 use dumbarp_common::{
-    FlowKey, IPPROTO_TCP, IPPROTO_UDP, IPV4_CHECK_OFFSET, IPV4_TOS_OFFSET, tos_with_dscp,
+    COUNTER_SLOTS, CTR_DSCP_TAGGED, CTR_FLOW_HIT, CTR_SRC_FALLBACK, CTR_UNMARKED, FlowKey,
+    IPPROTO_TCP, IPPROTO_UDP, IPV4_CHECK_OFFSET, IPV4_TOS_OFFSET, tos_with_dscp,
 };
 use network_types::{
     eth::{EthHdr, EtherType},
@@ -20,6 +21,18 @@ static DSCP_IDS: HashMap<u8, u32> = HashMap::with_max_entries(64, 0);
 
 #[map]
 static FLOWS: LruHashMap<FlowKey, u32> = LruHashMap::with_max_entries(65536, 0);
+
+#[map]
+static SRC_MARKS: HashMap<u32, u32> = HashMap::with_max_entries(4096, 0);
+
+#[map]
+static COUNTERS: PerCpuArray<u64> = PerCpuArray::with_max_entries(COUNTER_SLOTS, 0);
+
+fn bump(slot: u32) {
+    if let Some(v) = COUNTERS.get_ptr_mut(slot) {
+        unsafe { *v += 1 };
+    }
+}
 
 #[classifier]
 pub fn dumbarp_routerd(ctx: TcContext) -> i32 {
@@ -45,13 +58,23 @@ fn try_steer(ctx: &TcContext) -> Result<i32, ()> {
         && let Some(mark) = unsafe { DSCP_IDS.get(&dscp) }.copied()
     {
         let _ = FLOWS.insert(&key.reversed(), &mark, 0);
+        bump(CTR_DSCP_TAGGED);
         return strip_dscp(ctx, &ip);
     }
 
     if let Some(mark) = unsafe { FLOWS.get(&key) }.copied() {
         ctx.skb.set_mark(mark);
+        bump(CTR_FLOW_HIT);
+        return Ok(pass);
     }
 
+    if let Some(mark) = unsafe { SRC_MARKS.get(&key.src) }.copied() {
+        ctx.skb.set_mark(mark);
+        bump(CTR_SRC_FALLBACK);
+        return Ok(pass);
+    }
+
+    bump(CTR_UNMARKED);
     Ok(pass)
 }
 

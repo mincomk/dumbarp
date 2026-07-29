@@ -44,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
         cache: Default::default(),
         gateway_cache: Default::default(),
         datapath: Mutex::new(datapath),
+        known_ids: Default::default(),
     });
 
     tracing::info!(

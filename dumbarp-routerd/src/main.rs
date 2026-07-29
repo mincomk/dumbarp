@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use dumbarp_routing::RouteManager;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
@@ -54,12 +55,28 @@ async fn main() -> anyhow::Result<()> {
         "dumbarp-routerd starting"
     );
 
+    if let Err(err) = router.reconcile(&[]).await {
+        tracing::error!(%err, "purging leftover routing state failed");
+    }
+
     if let Err(err) = reconcile::reconcile_once(&cfg, &http, &router, &state).await {
         tracing::error!(%err, "initial reconcile failed");
     }
-    reconcile::spawn(cfg, http, router, state);
+    reconcile::spawn(cfg, http, Arc::clone(&router), state);
 
-    tokio::signal::ctrl_c().await?;
+    shutdown_signal().await?;
     tracing::info!("shutting down");
+    if let Err(err) = router.reconcile(&[]).await {
+        tracing::error!(%err, "tearing down routing state failed");
+    }
+    Ok(())
+}
+
+async fn shutdown_signal() -> anyhow::Result<()> {
+    let mut sigterm = signal(SignalKind::terminate())?;
+    tokio::select! {
+        res = tokio::signal::ctrl_c() => res?,
+        _ = sigterm.recv() => {}
+    }
     Ok(())
 }

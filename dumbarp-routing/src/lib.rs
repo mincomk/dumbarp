@@ -13,6 +13,7 @@ use rtnetlink::{Handle, IpVersion, RouteMessageBuilder, new_connection};
 const DUMBARP_PROTO_RAW: u8 = 0x9A;
 const DUMBARP_PROTO: RouteProtocol = RouteProtocol::Other(DUMBARP_PROTO_RAW);
 const DUMBARP_PRIORITY: u32 = 9876;
+const FWMASK_EXACT: u32 = 0xFFFF_FFFF;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteSpec {
@@ -74,13 +75,15 @@ impl RouteManager {
 
         for table in all_tables {
             let want = resolved.get(&table);
-            let have_rule = current_rules.get(&table);
+            let have_rules = current_rules
+                .get(&table)
+                .map(|rules| rules.as_slice())
+                .unwrap_or(&[]);
             let have_route = current_routes.get(&table);
 
-            let matches = match (want, have_rule, have_route) {
-                (Some(w), Some(r), Some(rt)) => {
-                    r.src == w.src
-                        && r.fwmark == w.fwmark
+            let matches = match (want, have_rules, have_route) {
+                (Some(w), [r], Some(rt)) => {
+                    r.matches(w)
                         && rt.gateway == w.gateway
                         && rt.oif == w.ifindex
                         && rt.onlink
@@ -92,18 +95,37 @@ impl RouteManager {
                 continue;
             }
 
-            if let Some(rule) = have_rule
-                && let Err(err) = self.del_rule(rule.src, table, rule.fwmark).await
-            {
-                tracing::warn!(table, %err, "delete stale rule failed");
+            if have_rules.len() > 1 {
+                tracing::warn!(
+                    table,
+                    count = have_rules.len(),
+                    "multiple dumbarp rules for one table; removing all"
+                );
+            }
+
+            let mut delete_failed = false;
+            for rule in have_rules {
+                if let Err(err) = self.del_rule(rule.src, table, rule.fwmark).await {
+                    tracing::warn!(table, src = %rule.src, %err, "delete stale rule failed");
+                    delete_failed = true;
+                }
             }
             if have_route.is_some()
                 && let Err(err) = self.del_route(table).await
             {
                 tracing::warn!(table, %err, "delete stale route failed");
+                delete_failed = true;
             }
 
             if let Some(w) = want {
+                if delete_failed {
+                    tracing::warn!(
+                        table,
+                        src = %w.src,
+                        "skipping add while stale state remains; retrying next pass"
+                    );
+                    continue;
+                }
                 if let Err(err) = self.add_rule(w.src, table, w.fwmark).await {
                     tracing::warn!(table, src = %w.src, %err, "add rule failed");
                     continue;
@@ -134,14 +156,14 @@ impl RouteManager {
         Ok(link.header.index)
     }
 
-    async fn list_rules(&self) -> anyhow::Result<HashMap<u32, CurrentRule>> {
-        let mut out = HashMap::new();
+    async fn list_rules(&self) -> anyhow::Result<HashMap<u32, Vec<CurrentRule>>> {
+        let mut out: HashMap<u32, Vec<CurrentRule>> = HashMap::new();
         let mut stream = self.handle.rule().get(IpVersion::V4).execute();
         while let Some(msg) = stream.try_next().await? {
-            let Some((src, table, fwmark)) = parse_dumbarp_rule(&msg) else {
+            let Some((table, rule)) = parse_dumbarp_rule(&msg) else {
                 continue;
             };
-            out.insert(table, CurrentRule { src, fwmark });
+            out.entry(table).or_default().push(rule);
         }
         Ok(out)
     }
@@ -176,6 +198,9 @@ impl RouteManager {
             .priority(DUMBARP_PRIORITY);
         if let Some(mark) = fwmark {
             req = req.fw_mark(mark);
+            req.message_mut()
+                .attributes
+                .push(RuleAttribute::FwMask(FWMASK_EXACT));
         }
         req.execute()
             .await
@@ -254,9 +279,23 @@ struct ResolvedSpec {
     fwmark: Option<u32>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 struct CurrentRule {
     src: Ipv4Addr,
     fwmark: Option<u32>,
+    fwmask: Option<u32>,
+}
+
+impl CurrentRule {
+    fn matches(&self, want: &ResolvedSpec) -> bool {
+        self.src == want.src
+            && self.fwmark == want.fwmark
+            && self.fwmask == expected_fwmask(want.fwmark)
+    }
+}
+
+fn expected_fwmask(fwmark: Option<u32>) -> Option<u32> {
+    fwmark.map(|_| FWMASK_EXACT)
 }
 
 struct CurrentRoute {
@@ -292,7 +331,7 @@ pub fn table_id_for(ip: Ipv4Addr) -> u32 {
     }
 }
 
-fn parse_dumbarp_rule(msg: &RuleMessage) -> Option<(Ipv4Addr, u32, Option<u32>)> {
+fn parse_dumbarp_rule(msg: &RuleMessage) -> Option<(u32, CurrentRule)> {
     if msg.header.family != AddressFamily::Inet {
         return None;
     }
@@ -300,12 +339,14 @@ fn parse_dumbarp_rule(msg: &RuleMessage) -> Option<(Ipv4Addr, u32, Option<u32>)>
     let mut src = None;
     let mut table_attr = None;
     let mut fwmark = None;
+    let mut fwmask = None;
     for attr in &msg.attributes {
         match attr {
             RuleAttribute::Priority(p) => priority = Some(*p),
             RuleAttribute::Source(std::net::IpAddr::V4(v4)) => src = Some(*v4),
             RuleAttribute::Table(t) => table_attr = Some(*t),
             RuleAttribute::FwMark(m) => fwmark = Some(*m),
+            RuleAttribute::FwMask(m) => fwmask = Some(*m),
             _ => {}
         }
     }
@@ -317,7 +358,15 @@ fn parse_dumbarp_rule(msg: &RuleMessage) -> Option<(Ipv4Addr, u32, Option<u32>)>
         return None;
     }
     let table = table_attr.unwrap_or(msg.header.table as u32);
-    Some((src, table, fwmark.filter(|m| *m != 0)))
+    let fwmark = fwmark.filter(|m| *m != 0);
+    Some((
+        table,
+        CurrentRule {
+            src,
+            fwmark,
+            fwmask: fwmark.and(fwmask),
+        },
+    ))
 }
 
 fn parse_dumbarp_route(msg: &RouteMessage) -> Option<ParsedRoute> {
@@ -348,4 +397,88 @@ fn parse_dumbarp_route(msg: &RouteMessage) -> Option<ParsedRoute> {
         oif: oif?,
         onlink,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule_msg(src: Ipv4Addr, table: u32, fwmark: Option<u32>, fwmask: Option<u32>) -> RuleMessage {
+        let mut msg = RuleMessage::default();
+        msg.header.family = AddressFamily::Inet;
+        msg.header.src_len = 32;
+        msg.header.action = RuleAction::ToTable;
+        msg.attributes.push(RuleAttribute::Source(src.into()));
+        msg.attributes.push(RuleAttribute::Table(table));
+        msg.attributes.push(RuleAttribute::Priority(DUMBARP_PRIORITY));
+        if let Some(mark) = fwmark {
+            msg.attributes.push(RuleAttribute::FwMark(mark));
+        }
+        if let Some(mask) = fwmask {
+            msg.attributes.push(RuleAttribute::FwMask(mask));
+        }
+        msg
+    }
+
+    fn spec(src: Ipv4Addr, fwmark: Option<u32>) -> ResolvedSpec {
+        ResolvedSpec {
+            src,
+            gateway: Ipv4Addr::new(10, 0, 0, 1),
+            ifindex: 2,
+            fwmark,
+        }
+    }
+
+    #[test]
+    fn marked_rule_with_exact_mask_matches() {
+        let src = Ipv4Addr::new(110, 13, 196, 173);
+        let msg = rule_msg(src, 1846396077, Some(2), Some(FWMASK_EXACT));
+        let (table, rule) = parse_dumbarp_rule(&msg).unwrap();
+        assert_eq!(table, 1846396077);
+        assert!(rule.matches(&spec(src, Some(2))));
+    }
+
+    #[test]
+    fn marked_rule_with_narrow_mask_is_drift() {
+        let src = Ipv4Addr::new(110, 13, 196, 173);
+        let msg = rule_msg(src, 1846396077, Some(2), Some(0x0F));
+        let (_, rule) = parse_dumbarp_rule(&msg).unwrap();
+        assert!(!rule.matches(&spec(src, Some(2))));
+    }
+
+    #[test]
+    fn marked_rule_without_mask_is_drift() {
+        let src = Ipv4Addr::new(110, 13, 196, 173);
+        let msg = rule_msg(src, 1846396077, Some(2), None);
+        let (_, rule) = parse_dumbarp_rule(&msg).unwrap();
+        assert!(!rule.matches(&spec(src, Some(2))));
+    }
+
+    #[test]
+    fn unmarked_rule_never_matches_marked_spec() {
+        let src = Ipv4Addr::new(110, 13, 196, 173);
+        let msg = rule_msg(src, 1846396077, None, None);
+        let (_, rule) = parse_dumbarp_rule(&msg).unwrap();
+        assert!(!rule.matches(&spec(src, Some(2))));
+        assert!(rule.matches(&spec(src, None)));
+    }
+
+    #[test]
+    fn zero_fwmark_is_treated_as_unmarked() {
+        let src = Ipv4Addr::new(110, 13, 196, 173);
+        let msg = rule_msg(src, 1846396077, Some(0), Some(0));
+        let (_, rule) = parse_dumbarp_rule(&msg).unwrap();
+        assert_eq!(rule.fwmark, None);
+        assert_eq!(rule.fwmask, None);
+    }
+
+    #[test]
+    fn foreign_priority_is_ignored() {
+        let src = Ipv4Addr::new(110, 13, 196, 173);
+        let mut msg = rule_msg(src, 1846396077, Some(2), Some(FWMASK_EXACT));
+        msg.attributes
+            .retain(|a| !matches!(a, RuleAttribute::Priority(_)));
+        msg.attributes.push(RuleAttribute::Priority(100));
+        assert!(parse_dumbarp_rule(&msg).is_none());
+    }
 }

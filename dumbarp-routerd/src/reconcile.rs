@@ -86,7 +86,13 @@ async fn reconcile_via_gateway(
             Instant::now(),
         )
     };
-    let (desired, id_set) = build_gateway_specs(&daemons, &gw.device_overrides, &ids);
+    let id_set: HashSet<u8> = ids.values().copied().collect();
+    let desired = build_gateway_specs(
+        &daemons,
+        &gw.device_overrides,
+        &ids,
+        cfg.source_based_routing,
+    );
 
     let counters = sync_datapath(state, &id_set, &desired).await;
 
@@ -97,6 +103,7 @@ async fn reconcile_via_gateway(
 
     tracing::info!(
         mode = "gateway",
+        source_based_routing = cfg.source_based_routing,
         daemons = daemons.len(),
         fetched_ok = stats.fetched_ok,
         used_cache = stats.used_cache,
@@ -178,15 +185,20 @@ async fn reconcile_via_daemons(
         let Some(leases) = view.get(&daemon.name) else {
             continue;
         };
-        let Some(id) = ids.get(&daemon.name).copied() else {
-            tracing::warn!(
-                daemon = %daemon.name,
-                ips = leases.ips.len(),
-                "no usable dumbarpd_id; skipping source rules"
-            );
-            continue;
+        let fwmark = if cfg.source_based_routing {
+            None
+        } else {
+            let Some(id) = ids.get(&daemon.name).copied() else {
+                tracing::warn!(
+                    daemon = %daemon.name,
+                    ips = leases.ips.len(),
+                    "no usable dumbarpd_id; skipping source rules"
+                );
+                continue;
+            };
+            Some(u32::from(id))
         };
-        push_specs(daemon, &leases.ips, u32::from(id), &mut desired, &mut seen_src);
+        push_specs(daemon, &leases.ips, fwmark, &mut desired, &mut seen_src);
     }
 
     let counters = sync_datapath(state, &id_set, &desired).await;
@@ -197,6 +209,7 @@ async fn reconcile_via_daemons(
     }
 
     tracing::info!(
+        source_based_routing = cfg.source_based_routing,
         daemons = cfg.daemons.len(),
         fetched_ok = stats.fetched_ok,
         used_cache = stats.used_cache,
@@ -216,8 +229,8 @@ fn build_gateway_specs(
     daemons: &[DaemonRoutes],
     device_overrides: &HashMap<String, String>,
     ids: &HashMap<String, u8>,
-) -> (Vec<RouteSpec>, HashSet<u8>) {
-    let mut id_set: HashSet<u8> = HashSet::new();
+    source_based_routing: bool,
+) -> Vec<RouteSpec> {
     let mut desired: Vec<RouteSpec> = Vec::new();
     let mut seen_src: HashSet<Ipv4Addr> = HashSet::new();
 
@@ -227,16 +240,19 @@ fn build_gateway_specs(
             .cloned()
             .unwrap_or_else(|| d.device.clone());
 
-        let Some(id) = ids.get(&d.name).copied() else {
-            tracing::warn!(
-                daemon = %d.name,
-                ips = d.ips.len(),
-                "no usable dumbarpd_id; skipping source rules"
-            );
-            continue;
+        let fwmark = if source_based_routing {
+            None
+        } else {
+            let Some(id) = ids.get(&d.name).copied() else {
+                tracing::warn!(
+                    daemon = %d.name,
+                    ips = d.ips.len(),
+                    "no usable dumbarpd_id; skipping source rules"
+                );
+                continue;
+            };
+            Some(u32::from(id))
         };
-        id_set.insert(id);
-        let fwmark = Some(u32::from(id));
 
         for ip in &d.ips {
             if !seen_src.insert(*ip) {
@@ -251,7 +267,7 @@ fn build_gateway_specs(
         }
     }
 
-    (desired, id_set)
+    desired
 }
 
 fn resolve_ids(
@@ -319,7 +335,7 @@ fn validate_id(name: &str, id: Option<u8>, claimed: &mut HashMap<u8, String>) ->
 fn push_specs(
     daemon: &DaemonEntry,
     ips: &[Ipv4Addr],
-    fwmark: u32,
+    fwmark: Option<u32>,
     out: &mut Vec<RouteSpec>,
     seen: &mut HashSet<Ipv4Addr>,
 ) {
@@ -335,7 +351,7 @@ fn push_specs(
             src: *ip,
             gateway: daemon.nexthop,
             iface: daemon.device.clone(),
-            fwmark: Some(fwmark),
+            fwmark,
         });
     }
 }
@@ -380,12 +396,16 @@ mod tests {
     #[test]
     fn uses_gateway_device_when_not_overridden() {
         let d = vec![daemon("homelab", [10, 0, 0, 5], "br0", Some(7), &[[110, 110, 110, 110]])];
-        let (specs, ids) = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d));
+        let ids = fresh_ids(&d);
+        let specs = build_gateway_specs(&d, &HashMap::new(), &ids, false);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].iface, "br0");
         assert_eq!(specs[0].fwmark, Some(7));
         assert_eq!(specs[0].gateway, Ipv4Addr::new(10, 0, 0, 5));
-        assert_eq!(ids, HashSet::from([7]));
+        assert_eq!(
+            ids.values().copied().collect::<HashSet<u8>>(),
+            HashSet::from([7])
+        );
     }
 
     #[test]
@@ -395,7 +415,7 @@ mod tests {
             daemon("edge", [10, 0, 0, 6], "br1", Some(9), &[[120, 120, 120, 120]]),
         ];
         let overrides = HashMap::from([("homelab".to_string(), "eno1".to_string())]);
-        let (specs, _) = build_gateway_specs(&d, &overrides, &fresh_ids(&d));
+        let specs = build_gateway_specs(&d, &overrides, &fresh_ids(&d), false);
         assert_eq!(specs[0].iface, "eno1");
         assert_eq!(specs[1].iface, "br1");
     }
@@ -403,7 +423,8 @@ mod tests {
     #[test]
     fn daemon_without_id_is_skipped() {
         let d = vec![daemon("legacy", [10, 0, 0, 7], "br0", None, &[[1, 2, 3, 4]])];
-        let (specs, ids) = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d));
+        let ids = fresh_ids(&d);
+        let specs = build_gateway_specs(&d, &HashMap::new(), &ids, false);
         assert!(specs.is_empty());
         assert!(ids.is_empty());
     }
@@ -416,8 +437,12 @@ mod tests {
             daemon("c", [10, 0, 0, 3], "br0", Some(7), &[[3, 3, 3, 3]]),
             daemon("d", [10, 0, 0, 4], "br0", Some(7), &[[4, 4, 4, 4]]),
         ];
-        let (specs, ids) = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d));
-        assert_eq!(ids, HashSet::from([7]));
+        let ids = fresh_ids(&d);
+        let specs = build_gateway_specs(&d, &HashMap::new(), &ids, false);
+        assert_eq!(
+            ids.values().copied().collect::<HashSet<u8>>(),
+            HashSet::from([7])
+        );
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].src, Ipv4Addr::new(3, 3, 3, 3));
         assert_eq!(specs[0].fwmark, Some(7));
@@ -430,9 +455,33 @@ mod tests {
             daemon("b", [10, 0, 0, 2], "br0", Some(3), &[[2, 2, 2, 2], [5, 5, 5, 5]]),
             daemon("c", [10, 0, 0, 3], "br0", Some(70), &[[3, 3, 3, 3]]),
         ];
-        let (specs, _) = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d));
+        let specs = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d), false);
         assert_eq!(specs.len(), 2);
         assert!(specs.iter().all(|s| s.fwmark == Some(3)));
+    }
+
+    #[test]
+    fn source_based_routing_emits_unmarked_rules_for_every_daemon() {
+        let d = vec![
+            daemon("a", [10, 0, 0, 1], "br0", None, &[[1, 1, 1, 1]]),
+            daemon("b", [10, 0, 0, 2], "br1", Some(3), &[[2, 2, 2, 2], [5, 5, 5, 5]]),
+            daemon("c", [10, 0, 0, 3], "br2", Some(70), &[[3, 3, 3, 3]]),
+        ];
+        let specs = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d), true);
+
+        assert_eq!(specs.len(), 4);
+        assert!(specs.iter().all(|s| s.fwmark.is_none()));
+        assert_eq!(specs[0].src, Ipv4Addr::new(1, 1, 1, 1));
+        assert_eq!(specs[0].iface, "br0");
+        assert_eq!(specs[3].src, Ipv4Addr::new(3, 3, 3, 3));
+        assert_eq!(specs[3].gateway, Ipv4Addr::new(10, 0, 0, 3));
+    }
+
+    #[test]
+    fn source_based_routing_clears_the_src_marks_map() {
+        let d = vec![daemon("a", [10, 0, 0, 1], "br0", Some(3), &[[2, 2, 2, 2]])];
+        let specs = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d), true);
+        assert!(src_marks(&specs).is_empty());
     }
 
     #[test]
@@ -442,7 +491,7 @@ mod tests {
             daemon("b", [10, 0, 0, 2], "br1", Some(9), &[[6, 6, 6, 6]]),
             daemon("c", [10, 0, 0, 3], "br2", None, &[[7, 7, 7, 7]]),
         ];
-        let (specs, _) = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d));
+        let specs = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d), false);
         let marks = src_marks(&specs);
 
         assert_eq!(marks.len(), specs.len());

@@ -13,6 +13,8 @@ pub struct Config {
     #[serde(default = "default_stale")]
     pub stale_after_secs: u64,
     #[serde(default)]
+    pub source_based_routing: bool,
+    #[serde(default)]
     pub daemons: Vec<DaemonEntry>,
     #[serde(default)]
     pub gateway: Option<GatewayEntry>,
@@ -154,6 +156,13 @@ device = "br0"
         assert_eq!(cfg.dscp.ifaces, vec!["eth1".to_string()]);
         assert_eq!(cfg.dscp.max_flows, 65536);
         assert_eq!(cfg.refresh_interval_secs, 30);
+        assert!(!cfg.source_based_routing);
+    }
+
+    #[test]
+    fn source_based_routing_can_be_ticked_on() {
+        let raw = format!("source_based_routing = true\n{BASE}\n[dscp]\nifaces = [\"eth1\"]\n");
+        assert!(load_str(&raw).unwrap().source_based_routing);
     }
 
     #[test]

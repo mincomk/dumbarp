@@ -101,6 +101,7 @@ let
       };
     }
     // lib.optionalAttrs isRouterd {
+      source_based_routing = cfg.sourceBasedRouting;
       dscp = {
         ifaces = cfg.dscp.ifaces;
         max_flows = cfg.dscp.maxFlows;
@@ -276,6 +277,32 @@ in
     };
   }
   // lib.optionalAttrs isRouterd {
+    sourceBasedRouting = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Steer a daemon's lease IPs on source address alone, dropping the
+        {literal}`fwmark` term from the policy rules.
+
+        By default each rule reads {literal}`from <lease-ip> fwmark <id> lookup
+        <table>`, and the mark is learned per-flow by the eBPF datapath from the
+        DSCP tag the daemon stamps. If that learning misses — the program is not
+        attached to the interface where reply traffic arrives, the flow table
+        evicted the entry, or the daemon never stamped the packet — the rule
+        does not match and the packet leaves via the main table instead, with a
+        lease IP as its source.
+
+        Turning this on removes that failure mode. The source IP already selects
+        the table on its own, so the mark carries no routing information; the
+        {literal}`dumbarpd_id` is then only used for the DSCP strip path, and
+        daemons that advertise no usable id still get their routes installed.
+
+        Check {option}`dscp.ifaces` before reaching for this — a mark that is
+        never set because the datapath is not attached where replies arrive
+        shows up as a large {literal}`unmarked` counter in the reconcile log.
+      '';
+    };
+
     gateway = lib.mkOption {
       type = lib.types.nullOr upstreamType;
       default = null;

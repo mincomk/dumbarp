@@ -41,8 +41,6 @@ pub struct DaemonEntry {
 #[derive(Debug, Deserialize, Clone)]
 pub struct DscpConfig {
     pub ifaces: Vec<String>,
-    #[serde(default = "default_max_flows")]
-    pub max_flows: u32,
 }
 
 fn default_refresh() -> u64 {
@@ -51,10 +49,6 @@ fn default_refresh() -> u64 {
 
 fn default_stale() -> u64 {
     300
-}
-
-fn default_max_flows() -> u32 {
-    65536
 }
 
 impl Config {
@@ -100,9 +94,6 @@ impl Config {
             return Err(anyhow!(
                 "config: `[dscp].ifaces` must list at least one interface"
             ));
-        }
-        if self.dscp.max_flows == 0 {
-            return Err(anyhow!("config: `[dscp].max_flows` must be > 0"));
         }
 
         let mut seen: HashSet<&str> = HashSet::new();
@@ -154,7 +145,6 @@ device = "br0"
     fn accepts_minimal_config() {
         let cfg = load_str(&format!("{BASE}\n[dscp]\nifaces = [\"eth1\"]\n")).unwrap();
         assert_eq!(cfg.dscp.ifaces, vec!["eth1".to_string()]);
-        assert_eq!(cfg.dscp.max_flows, 65536);
         assert_eq!(cfg.refresh_interval_secs, 30);
         assert!(!cfg.source_based_routing);
     }

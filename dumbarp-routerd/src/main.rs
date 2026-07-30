@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
         .timeout(Duration::from_secs(10))
         .build()?;
     let router = Arc::new(RouteManager::new()?);
-    let datapath = Datapath::load(&cfg.dscp.ifaces, cfg.dscp.max_flows)?;
+    let datapath = Datapath::load(&cfg.dscp.ifaces)?;
     let state = Arc::new(RouterState {
         cache: Default::default(),
         gateway_cache: Default::default(),
@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         daemons = cfg.daemons.len(),
         ifaces = cfg.dscp.ifaces.len(),
-        max_flows = cfg.dscp.max_flows,
+        source_based_routing = cfg.source_based_routing,
         refresh_interval_secs = cfg.refresh_interval_secs,
         stale_after_secs = cfg.stale_after_secs,
         "dumbarp-routerd starting"

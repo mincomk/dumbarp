@@ -94,7 +94,7 @@ async fn reconcile_via_gateway(
         cfg.source_based_routing,
     );
 
-    let counters = sync_datapath(state, &id_set, &desired).await;
+    let counters = sync_datapath(state, &id_set).await;
 
     let desired_count = desired.len();
     if let Err(err) = router.reconcile(&desired).await {
@@ -110,31 +110,17 @@ async fn reconcile_via_gateway(
         dropped = stats.dropped,
         dscp_ids = id_set.len(),
         desired = desired_count,
-        dscp_tagged = counters.dscp_tagged,
-        flow_hit = counters.flow_hit,
-        src_fallback = counters.src_fallback,
-        unmarked = counters.unmarked,
+        tagged = counters.tagged,
+        untagged = counters.untagged,
         "reconcile complete"
     );
     Ok(())
 }
 
-async fn sync_datapath(
-    state: &RouterState,
-    id_set: &HashSet<u8>,
-    desired: &[RouteSpec],
-) -> Counters {
-    let src_marks: HashMap<Ipv4Addr, u32> = desired
-        .iter()
-        .filter_map(|s| s.fwmark.map(|mark| (s.src, mark)))
-        .collect();
-
+async fn sync_datapath(state: &RouterState, id_set: &HashSet<u8>) -> Counters {
     let mut datapath = state.datapath.lock().await;
     if let Err(err) = datapath.sync_ids(id_set) {
         tracing::error!(%err, "syncing DSCP_IDS map failed");
-    }
-    if let Err(err) = datapath.sync_src_marks(&src_marks) {
-        tracing::error!(%err, "syncing SRC_MARKS map failed");
     }
     match datapath.counters() {
         Ok(counters) => counters,
@@ -201,7 +187,7 @@ async fn reconcile_via_daemons(
         push_specs(daemon, &leases.ips, fwmark, &mut desired, &mut seen_src);
     }
 
-    let counters = sync_datapath(state, &id_set, &desired).await;
+    let counters = sync_datapath(state, &id_set).await;
 
     let desired_count = desired.len();
     if let Err(err) = router.reconcile(&desired).await {
@@ -216,10 +202,8 @@ async fn reconcile_via_daemons(
         dropped = stats.dropped,
         dscp_ids = id_set.len(),
         desired = desired_count,
-        dscp_tagged = counters.dscp_tagged,
-        flow_hit = counters.flow_hit,
-        src_fallback = counters.src_fallback,
-        unmarked = counters.unmarked,
+        tagged = counters.tagged,
+        untagged = counters.untagged,
         "reconcile complete"
     );
     Ok(())
@@ -386,13 +370,6 @@ mod tests {
         )
     }
 
-    fn src_marks(specs: &[RouteSpec]) -> HashMap<Ipv4Addr, u32> {
-        specs
-            .iter()
-            .filter_map(|s| s.fwmark.map(|mark| (s.src, mark)))
-            .collect()
-    }
-
     #[test]
     fn uses_gateway_device_when_not_overridden() {
         let d = vec![daemon("homelab", [10, 0, 0, 5], "br0", Some(7), &[[110, 110, 110, 110]])];
@@ -475,33 +452,6 @@ mod tests {
         assert_eq!(specs[0].iface, "br0");
         assert_eq!(specs[3].src, Ipv4Addr::new(3, 3, 3, 3));
         assert_eq!(specs[3].gateway, Ipv4Addr::new(10, 0, 0, 3));
-    }
-
-    #[test]
-    fn source_based_routing_clears_the_src_marks_map() {
-        let d = vec![daemon("a", [10, 0, 0, 1], "br0", Some(3), &[[2, 2, 2, 2]])];
-        let specs = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d), true);
-        assert!(src_marks(&specs).is_empty());
-    }
-
-    #[test]
-    fn src_marks_cover_every_spec_with_the_same_mark() {
-        let d = vec![
-            daemon("a", [10, 0, 0, 1], "br0", Some(3), &[[2, 2, 2, 2], [5, 5, 5, 5]]),
-            daemon("b", [10, 0, 0, 2], "br1", Some(9), &[[6, 6, 6, 6]]),
-            daemon("c", [10, 0, 0, 3], "br2", None, &[[7, 7, 7, 7]]),
-        ];
-        let specs = build_gateway_specs(&d, &HashMap::new(), &fresh_ids(&d), false);
-        let marks = src_marks(&specs);
-
-        assert_eq!(marks.len(), specs.len());
-        for spec in &specs {
-            assert_eq!(marks.get(&spec.src).copied(), spec.fwmark);
-        }
-        assert_eq!(marks.get(&Ipv4Addr::new(2, 2, 2, 2)), Some(&3));
-        assert_eq!(marks.get(&Ipv4Addr::new(5, 5, 5, 5)), Some(&3));
-        assert_eq!(marks.get(&Ipv4Addr::new(6, 6, 6, 6)), Some(&9));
-        assert_eq!(marks.get(&Ipv4Addr::new(7, 7, 7, 7)), None);
     }
 
     #[test]

@@ -37,9 +37,20 @@ auth_token = "REPLACE_ME"
 # device      = "br0"
 
 [dscp]
-# Every interface the ingress program attaches to — both the daemon-facing
-# links and the links where reply traffic enters this router. The program
-# tells the two roles apart by packet content, so no per-iface role is needed.
-ifaces    = []
-# Size of the flow table. Fixed at load time; raise it for busy routers.
-max_flows = 65536
+# Every interface a tagged packet can arrive on. The program only ever acts on
+# the forward direction, where the daemon's in-band DSCP tag is; the reply gets
+# its mark back from conntrack, so reply-side interfaces need not be listed.
+ifaces = []
+
+# REQUIRED on every router: without this table the mark never survives past the
+# packet that carried the tag, the policy rules never match a reply, and traffic
+# from a lease IP falls through to the main table. The NixOS module installs it
+# for you (services.dumbarp-routerd.manageNftables).
+#
+#   table inet dumbarp-mark {
+#     chain prerouting {
+#       type filter hook prerouting priority mangle; policy accept;
+#       ct state new meta mark != 0 counter ct mark set meta mark
+#       meta mark 0 ct mark != 0 counter meta mark set ct mark
+#     }
+#   }

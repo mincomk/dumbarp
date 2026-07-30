@@ -104,7 +104,6 @@ let
       source_based_routing = cfg.sourceBasedRouting;
       dscp = {
         ifaces = cfg.dscp.ifaces;
-        max_flows = cfg.dscp.maxFlows;
       };
     }
   ) cfg.extraConfig;
@@ -277,6 +276,24 @@ in
     };
   }
   // lib.optionalAttrs isRouterd {
+    manageNftables = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Install the nftables table that saves the datapath's skb mark onto the
+        conntrack entry and restores it for the rest of the connection.
+
+        This is what makes the return path work across more than one hop. The
+        mark itself only ever lands on the forward direction, where the daemon's
+        in-band DSCP tag is; conntrack is what gives it back to the reply, on
+        each router the reply happens to traverse.
+
+        Turn this off only to manage the equivalent rules yourself — without
+        them the policy rules will never match a reply, and traffic from a lease
+        IP falls through to the main table.
+      '';
+    };
+
     sourceBasedRouting = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -329,14 +346,6 @@ in
         '';
       };
 
-      maxFlows = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 65536;
-        description = ''
-          Size of the eBPF flow table. Fixed at program load time, so raising it
-          requires a restart. Raise it on busy routers.
-        '';
-      };
     };
   };
 
@@ -391,6 +400,33 @@ in
 
     networking.firewall = lib.mkIf (isGateway && cfg.openFirewall && cfg.serve != null) {
       allowedTCPPorts = [ (lib.toInt (lib.last (lib.splitString ":" cfg.serve.listen))) ];
+    };
+
+    # Carry "this flow came from daemon N" across the return path.
+    #
+    # The TC ingress program turns the daemon's in-band DSCP tag into an skb
+    # mark on the forward direction. Saving that onto the conntrack entry lets
+    # every later packet of the same connection — including replies arriving on
+    # a different interface — get the mark back, which is what the policy rules
+    # installed by ${serviceName} match on.
+    #
+    # The tag rides the packet across every hop, so each router builds its own
+    # conntrack entry and steers the reply one hop further towards the daemon.
+    # A connection opened from inside the network never carried a tag, so its
+    # ct mark stays 0, no fwmark is set, and it routes normally.
+    networking.nftables = lib.mkIf (isRouterd && cfg.manageNftables) {
+      enable = true;
+      tables.dumbarp-mark = {
+        family = "inet";
+        content = ''
+          chain prerouting {
+            type filter hook prerouting priority mangle; policy accept;
+
+            ct state new meta mark != 0 counter ct mark set meta mark
+            meta mark 0 ct mark != 0 counter meta mark set ct mark
+          }
+        '';
+      };
     };
 
     systemd.services.${serviceName} = {

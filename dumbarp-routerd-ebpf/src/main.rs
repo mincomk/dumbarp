@@ -4,13 +4,10 @@
 use aya_ebpf::{
     bindings::TC_ACT_OK,
     macros::{classifier, map},
-    maps::{HashMap, LruHashMap, PerCpuArray},
+    maps::{HashMap, PerCpuArray},
     programs::TcContext,
 };
-use dumbarp_common::{
-    COUNTER_SLOTS, CTR_DSCP_TAGGED, CTR_FLOW_HIT, CTR_SRC_FALLBACK, CTR_UNMARKED, FlowKey,
-    IPPROTO_TCP, IPPROTO_UDP, IPV4_CHECK_OFFSET, IPV4_TOS_OFFSET, tos_with_dscp,
-};
+use dumbarp_common::{COUNTER_SLOTS, CTR_TAGGED, CTR_UNTAGGED};
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::Ipv4Hdr,
@@ -18,12 +15,6 @@ use network_types::{
 
 #[map]
 static DSCP_IDS: HashMap<u8, u32> = HashMap::with_max_entries(64, 0);
-
-#[map]
-static FLOWS: LruHashMap<FlowKey, u32> = LruHashMap::with_max_entries(65536, 0);
-
-#[map]
-static SRC_MARKS: HashMap<u32, u32> = HashMap::with_max_entries(4096, 0);
 
 #[map]
 static COUNTERS: PerCpuArray<u64> = PerCpuArray::with_max_entries(COUNTER_SLOTS, 0);
@@ -42,6 +33,12 @@ pub fn dumbarp_routerd(ctx: TcContext) -> i32 {
     }
 }
 
+// The daemon stamps a DSCP tag on traffic heading for one of its lease IPs, and
+// that tag rides the packet across every hop of the internal network. Each
+// router turns the tag into an skb mark; netfilter then saves the mark onto the
+// conntrack entry, so the reply gets it back on whichever hops carry it. The tag
+// is left on the wire here — the daemon at the far edge restores the original
+// DSCP on its own egress.
 fn try_steer(ctx: &TcContext) -> Result<i32, ()> {
     let pass = TC_ACT_OK as i32;
 
@@ -51,73 +48,18 @@ fn try_steer(ctx: &TcContext) -> Result<i32, ()> {
     }
 
     let ip: Ipv4Hdr = ctx.load(EthHdr::LEN).map_err(|_| ())?;
-    let key = flow_key(ctx, &ip);
     let dscp = ip.tos >> 2;
 
     if dscp != 0
         && let Some(mark) = unsafe { DSCP_IDS.get(&dscp) }.copied()
     {
-        let _ = FLOWS.insert(&key.reversed(), &mark, 0);
-        bump(CTR_DSCP_TAGGED);
-        return strip_dscp(ctx, &ip);
-    }
-
-    if let Some(mark) = unsafe { FLOWS.get(&key) }.copied() {
         ctx.skb.set_mark(mark);
-        bump(CTR_FLOW_HIT);
+        bump(CTR_TAGGED);
         return Ok(pass);
     }
 
-    if let Some(mark) = unsafe { SRC_MARKS.get(&key.src) }.copied() {
-        ctx.skb.set_mark(mark);
-        bump(CTR_SRC_FALLBACK);
-        return Ok(pass);
-    }
-
-    bump(CTR_UNMARKED);
+    bump(CTR_UNTAGGED);
     Ok(pass)
-}
-
-fn strip_dscp(ctx: &TcContext, ip: &Ipv4Hdr) -> Result<i32, ()> {
-    let pass = TC_ACT_OK as i32;
-
-    let old_tos = ip.tos;
-    let new_tos = tos_with_dscp(old_tos, 0);
-    if new_tos == old_tos {
-        return Ok(pass);
-    }
-
-    let old_word = ((ip.vihl as u16) << 8) | old_tos as u16;
-    let new_word = ((ip.vihl as u16) << 8) | new_tos as u16;
-
-    ctx.store(EthHdr::LEN + IPV4_TOS_OFFSET, &new_tos, 0)
-        .map_err(|_| ())?;
-    ctx.l3_csum_replace(
-        EthHdr::LEN + IPV4_CHECK_OFFSET,
-        old_word.to_be() as u64,
-        new_word.to_be() as u64,
-        2,
-    )
-    .map_err(|_| ())?;
-
-    Ok(pass)
-}
-
-fn flow_key(ctx: &TcContext, ip: &Ipv4Hdr) -> FlowKey {
-    let src = u32::from_ne_bytes(ip.src_addr);
-    let dst = u32::from_ne_bytes(ip.dst_addr);
-    let proto = ip.proto;
-
-    let mut sport = 0u16;
-    let mut dport = 0u16;
-    if (proto == IPPROTO_TCP || proto == IPPROTO_UDP) && ip.ihl() as usize == Ipv4Hdr::LEN
-        && let Ok(ports) = ctx.load::<[u8; 4]>(EthHdr::LEN + Ipv4Hdr::LEN)
-    {
-        sport = u16::from_be_bytes([ports[0], ports[1]]);
-        dport = u16::from_be_bytes([ports[2], ports[3]]);
-    }
-
-    FlowKey::new(src, dst, sport, dport, proto)
 }
 
 #[cfg(not(test))]

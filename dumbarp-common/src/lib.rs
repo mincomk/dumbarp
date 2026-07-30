@@ -8,11 +8,9 @@ pub const IPV4_CHECK_OFFSET: usize = 10;
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 
-pub const CTR_DSCP_TAGGED: u32 = 0;
-pub const CTR_FLOW_HIT: u32 = 1;
-pub const CTR_SRC_FALLBACK: u32 = 2;
-pub const CTR_UNMARKED: u32 = 3;
-pub const COUNTER_SLOTS: u32 = 4;
+pub const CTR_TAGGED: u32 = 0;
+pub const CTR_UNTAGGED: u32 = 1;
+pub const COUNTER_SLOTS: u32 = 2;
 
 pub fn csum_replace2(check: u16, old: u16, new: u16) -> u16 {
     let mut sum = (!check) as u32 + (!old) as u32 + new as u32;

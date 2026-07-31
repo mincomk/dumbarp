@@ -112,6 +112,7 @@ async fn reconcile_via_gateway(
         desired = desired_count,
         tagged = counters.tagged,
         untagged = counters.untagged,
+        skipped = counters.skipped,
         "reconcile complete"
     );
     Ok(())
@@ -204,6 +205,7 @@ async fn reconcile_via_daemons(
         desired = desired_count,
         tagged = counters.tagged,
         untagged = counters.untagged,
+        skipped = counters.skipped,
         "reconcile complete"
     );
     Ok(())

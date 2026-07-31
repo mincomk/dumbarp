@@ -33,17 +33,25 @@ async fn main() -> anyhow::Result<()> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
-    let router = Arc::new(RouteManager::new()?);
+    // Left unbuilt when route management is off, so no rtnetlink socket is
+    // opened at all: a dumbarp-routerd on the same host then owns the policy
+    // rules and routes outright, instead of the two overwriting each other on
+    // every pass.
+    let router = match cfg.manage_routes {
+        true => Some(Arc::new(RouteManager::new()?)),
+        false => None,
+    };
     let state = Arc::new(GatewayState::default());
 
     tracing::info!(
         daemons = cfg.daemons.len(),
+        manage_routes = cfg.manage_routes,
         refresh_interval_secs = cfg.refresh_interval_secs,
         stale_after_secs = cfg.stale_after_secs,
         "dumbarp-gateway starting"
     );
 
-    if let Err(err) = reconcile::reconcile_once(&cfg, &http, &router, &state).await {
+    if let Err(err) = reconcile::reconcile_once(&cfg, &http, router.as_deref(), &state).await {
         tracing::error!(%err, "initial reconcile failed");
     }
     reconcile::spawn(cfg.clone(), http, router, state.clone());

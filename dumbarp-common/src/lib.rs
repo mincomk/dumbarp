@@ -10,7 +10,8 @@ pub const IPPROTO_UDP: u8 = 17;
 
 pub const CTR_TAGGED: u32 = 0;
 pub const CTR_UNTAGGED: u32 = 1;
-pub const COUNTER_SLOTS: u32 = 2;
+pub const CTR_SKIPPED: u32 = 2;
+pub const COUNTER_SLOTS: u32 = 3;
 
 pub fn csum_replace2(check: u16, old: u16, new: u16) -> u16 {
     let mut sum = (!check) as u32 + (!old) as u32 + new as u32;

@@ -10,9 +10,11 @@ stale_after_secs      = 300
 # stamps. When that learning misses, the rule does not match and the packet
 # leaves via the main table with a lease IP as its source. Turning this on
 # removes that failure mode — the source IP already selects the table, so the
-# mark carries no routing information. Check `[dscp].ifaces` first: a large
-# `unmarked` counter in the reconcile log means the datapath is not attached
-# where reply traffic arrives.
+# mark carries no routing information. Check `[dscp].ifaces` first: the
+# reconcile log counts every packet the datapath sees as `tagged` (a DSCP tag
+# became a mark), `untagged` (no tag, or a tag no daemon claims), or `skipped`
+# (not IPv4). All three sitting at zero means the program is not attached where
+# the tagged forward traffic arrives.
 source_based_routing = false
 
 # Set EITHER [gateway] or [[daemons]], not both.

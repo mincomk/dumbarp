@@ -87,6 +87,9 @@ let
     // lib.optionalAttrs (cfg.daemons != [ ]) {
       daemons = daemonSettings;
     }
+    // lib.optionalAttrs isGateway {
+      manage_routes = cfg.manageRoutes;
+    }
     // lib.optionalAttrs (isGateway && cfg.serve != null) {
       serve = {
         listen = cfg.serve.listen;
@@ -274,6 +277,27 @@ in
       default = false;
       description = "Open the TCP port from {option}`serve.listen` in the firewall.";
     };
+
+    manageRoutes = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Install the source-based policy rules and routes for every lease IP
+        learned from the daemons.
+
+        Turn this off where a {command}`dumbarp-routerd` runs on the same host.
+        Both reconcilers claim the same routing state by tag — priority-9876
+        rules and protocol-0x9A routes — and delete whatever they do not
+        recognise, so each pass undoes the other's work: the gateway installs
+        rules with no {literal}`fwmark` term, routerd installs them with one,
+        and the return path flaps every {option}`refreshIntervalSecs`.
+
+        With this off the gateway becomes poll-and-serve only, opens no
+        rtnetlink socket, and drops {literal}`CAP_NET_ADMIN` entirely. It then
+        needs {option}`serve` set, since serving the daemon list is all that is
+        left for it to do.
+      '';
+    };
   }
   // lib.optionalAttrs isRouterd {
     manageNftables = lib.mkOption {
@@ -314,9 +338,11 @@ in
         {literal}`dumbarpd_id` is then only used for the DSCP strip path, and
         daemons that advertise no usable id still get their routes installed.
 
-        Check {option}`dscp.ifaces` before reaching for this — a mark that is
-        never set because the datapath is not attached where replies arrive
-        shows up as a large {literal}`unmarked` counter in the reconcile log.
+        Check {option}`dscp.ifaces` before reaching for this. The reconcile log
+        counts every packet the datapath sees as {literal}`tagged` (a DSCP tag
+        became a mark), {literal}`untagged` (no tag, or a tag no daemon claims),
+        or {literal}`skipped` (not IPv4). All three sitting at zero means the
+        program is not attached where the tagged forward traffic arrives.
       '';
     };
 
@@ -376,6 +402,10 @@ in
       {
         assertion = cfg.serve == null || (cfg.serve.authToken != null) || (cfg.serve.authTokenFile != null);
         message = "services.${serviceName}.serve: set either `authToken` or `authTokenFile`.";
+      }
+      {
+        assertion = cfg.manageRoutes || cfg.serve != null;
+        message = "services.${serviceName}: `manageRoutes = false` with no `serve` leaves nothing for this gateway to do.";
       }
     ]
     ++ lib.optionals isRouterd [
@@ -470,7 +500,7 @@ in
           "CAP_PERFMON"
         ];
       }
-      // lib.optionalAttrs isGateway {
+      // lib.optionalAttrs (isGateway && cfg.manageRoutes) {
         AmbientCapabilities = [ "CAP_NET_ADMIN" ];
         CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
       }

@@ -4,6 +4,18 @@ refresh_interval_secs = 30
 # /leases fetch fails, so transient outages don't flap routes.
 stale_after_secs      = 300
 
+# Install the source-based policy rules and routes for every lease IP learned
+# from the daemons. On by default.
+#
+# Turn this off where a dumbarp-routerd runs on the same host. Both reconcilers
+# claim the same routing state by tag — priority-9876 rules and protocol-0x9A
+# routes — and delete whatever they do not recognise, so each pass would undo
+# the other's work: the gateway installs rules with no fwmark term, routerd
+# installs them with one, and the return path flaps every refresh interval.
+# With this off the gateway stays poll-and-serve only and needs no [serve]-less
+# reason to hold CAP_NET_ADMIN.
+manage_routes = true
+
 # Optional: expose the resolved daemon list over HTTP so dumbarp-routerd
 # instances can learn it from here instead of repeating it on every router.
 # Omit this section entirely to keep the gateway poll-only with no listener.

@@ -6,16 +6,19 @@ use aya::{
     maps::{HashMap as BpfHashMap, PerCpuArray},
     programs::{SchedClassifier, TcAttachType, tc},
 };
-use dumbarp_common::{COUNTER_SLOTS, CTR_TAGGED, CTR_UNTAGGED};
+use dumbarp_common::{COUNTER_SLOTS, CTR_SKIPPED, CTR_TAGGED, CTR_UNTAGGED};
 
 const PROGRAM_NAME: &str = "dumbarp_routerd";
 const IDS_MAP_NAME: &str = "DSCP_IDS";
 const COUNTERS_MAP_NAME: &str = "COUNTERS";
 
+const ARPHRD_ETHER: u32 = 1;
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Counters {
     pub tagged: u64,
     pub untagged: u64,
+    pub skipped: u64,
 }
 
 pub struct Datapath {
@@ -44,7 +47,13 @@ impl Datapath {
             program
                 .attach(iface, TcAttachType::Ingress)
                 .with_context(|| format!("attaching TC ingress to `{iface}`"))?;
-            tracing::info!(iface, "TC ingress attached");
+            let arphrd = link_type(iface);
+            tracing::info!(
+                iface,
+                arphrd,
+                l3 = arphrd.is_some_and(|t| t != ARPHRD_ETHER),
+                "TC ingress attached"
+            );
         }
 
         Ok(Self { bpf })
@@ -88,6 +97,15 @@ impl Datapath {
         Ok(Counters {
             tagged: totals[CTR_TAGGED as usize],
             untagged: totals[CTR_UNTAGGED as usize],
+            skipped: totals[CTR_SKIPPED as usize],
         })
     }
+}
+
+fn link_type(iface: &str) -> Option<u32> {
+    std::fs::read_to_string(format!("/sys/class/net/{iface}/type"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }

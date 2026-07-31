@@ -16,6 +16,10 @@ const PROGRAM_NAME: &str = "dumbarp";
 const EGRESS_PROGRAM_NAME: &str = "dumbarp_egress";
 const MAP_NAME: &str = "ARP_TABLE";
 const DSCP_MAP_NAME: &str = "DSCP_ID";
+const L2_LEN_MAP_NAME: &str = "L2_LEN";
+
+const ARPHRD_ETHER: u32 = 1;
+const ETH_HLEN: u8 = 14;
 
 pub struct Dumbarp {
     bpf: Ebpf,
@@ -95,7 +99,7 @@ impl Dumbarp {
                 Ok(link) => Some(link),
                 Err(e) => {
                     self.clear_arp_entry(&key);
-                    self.clear_dscp_entry(ifindex);
+                    self.clear_iface_maps(ifindex);
                     self.detach_xdp(link_id);
                     return Err(e);
                 }
@@ -134,7 +138,7 @@ impl Dumbarp {
             ) {
                 let _ = program.detach(tc_link_id);
             }
-            self.clear_dscp_entry(ifindex);
+            self.clear_iface_maps(ifindex);
         }
 
         self.clear_arp_entry(&key);
@@ -168,6 +172,14 @@ impl Dumbarp {
         ids.insert(ifindex, dscp_id, 0)
             .context("inserting DSCP_ID entry")?;
 
+        let mut l2: BpfHashMap<_, u32, u8> = BpfHashMap::try_from(
+            self.bpf
+                .map_mut(L2_LEN_MAP_NAME)
+                .ok_or_else(|| anyhow!("eBPF map `{L2_LEN_MAP_NAME}` not found"))?,
+        )?;
+        l2.insert(ifindex, iface_l2_len(iface)?, 0)
+            .context("inserting L2_LEN entry")?;
+
         let _ = tc::qdisc_add_clsact(iface);
 
         let program: &mut SchedClassifier = self
@@ -196,13 +208,27 @@ impl Dumbarp {
         }
     }
 
-    fn clear_dscp_entry(&mut self, ifindex: u32) {
-        if let Some(map) = self.bpf.map_mut(DSCP_MAP_NAME)
-            && let Ok(mut ids) = BpfHashMap::<_, u32, u8>::try_from(map)
-        {
-            let _ = ids.remove(&ifindex);
+    fn clear_iface_maps(&mut self, ifindex: u32) {
+        for name in [DSCP_MAP_NAME, L2_LEN_MAP_NAME] {
+            if let Some(map) = self.bpf.map_mut(name)
+                && let Ok(mut entries) = BpfHashMap::<_, u32, u8>::try_from(map)
+            {
+                let _ = entries.remove(&ifindex);
+            }
         }
     }
+}
+
+// An L3 device such as a WireGuard tunnel carries no link-layer header, so the
+// egress classifier finds the IP header at offset 0 there and at 14 elsewhere.
+fn iface_l2_len(iface: &str) -> anyhow::Result<u8> {
+    let path = format!("/sys/class/net/{iface}/type");
+    let s = std::fs::read_to_string(&path).with_context(|| format!("reading {path}"))?;
+    let arphrd = s
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("parsing link type from {path}"))?;
+    Ok(if arphrd == ARPHRD_ETHER { ETH_HLEN } else { 0 })
 }
 
 fn iface_mac(iface: &str) -> anyhow::Result<[u8; 6]> {

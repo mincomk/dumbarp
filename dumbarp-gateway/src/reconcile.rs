@@ -16,7 +16,7 @@ pub type GatewayState = LeaseCache;
 pub fn spawn(
     cfg: Arc<Config>,
     http: reqwest::Client,
-    router: Arc<RouteManager>,
+    router: Option<Arc<RouteManager>>,
     state: Arc<GatewayState>,
 ) {
     tokio::spawn(async move {
@@ -26,7 +26,7 @@ pub fn spawn(
         ticker.tick().await; // consume immediate first tick — reconcile_once already ran
         loop {
             ticker.tick().await;
-            if let Err(err) = reconcile_once(&cfg, &http, &router, &state).await {
+            if let Err(err) = reconcile_once(&cfg, &http, router.as_deref(), &state).await {
                 tracing::error!(%err, "reconcile pass failed");
             }
         }
@@ -36,7 +36,7 @@ pub fn spawn(
 pub async fn reconcile_once(
     cfg: &Config,
     http: &reqwest::Client,
-    router: &RouteManager,
+    router: Option<&RouteManager>,
     state: &GatewayState,
 ) -> anyhow::Result<()> {
     let stale = Duration::from_secs(cfg.stale_after_secs);
@@ -61,12 +61,15 @@ pub async fn reconcile_once(
     }
 
     let desired_count = desired.len();
-    if let Err(err) = router.reconcile(&desired).await {
+    if let Some(router) = router
+        && let Err(err) = router.reconcile(&desired).await
+    {
         tracing::error!(%err, "routing reconcile failed");
     }
 
     tracing::info!(
         daemons = cfg.daemons.len(),
+        manage_routes = cfg.manage_routes,
         fetched_ok = stats.fetched_ok,
         used_cache = stats.used_cache,
         dropped = stats.dropped,

@@ -12,6 +12,8 @@ pub struct Config {
     pub refresh_interval_secs: u64,
     #[serde(default = "default_stale")]
     pub stale_after_secs: u64,
+    #[serde(default = "default_manage_routes")]
+    pub manage_routes: bool,
     pub daemons: Vec<DaemonEntry>,
     #[serde(default)]
     pub serve: Option<ServeConfig>,
@@ -43,6 +45,10 @@ fn default_stale() -> u64 {
 
 fn default_listen() -> SocketAddr {
     "0.0.0.0:1029".parse().unwrap()
+}
+
+fn default_manage_routes() -> bool {
+    true
 }
 
 impl Config {
@@ -91,6 +97,63 @@ impl Config {
         {
             return Err(anyhow!("config: `[serve].auth_token` must be non-empty"));
         }
+        if !cfg.manage_routes && cfg.serve.is_none() {
+            return Err(anyhow!(
+                "config: `manage_routes = false` with no `[serve]` leaves nothing for this gateway to do"
+            ));
+        }
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE: &str = r#"
+[[daemons]]
+name = "homelab"
+endpoint = "http://10.0.0.5:1028"
+auth_token = "t"
+nexthop = "10.0.0.5"
+device = "br0"
+"#;
+
+    const SERVE: &str = r#"
+[serve]
+listen = "0.0.0.0:1029"
+auth_token = "t"
+"#;
+
+    fn load_str(raw: &str) -> anyhow::Result<Config> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+
+        let dir = std::env::temp_dir().join(format!("dumbarp-gateway-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("c{}.toml", SEQ.fetch_add(1, Ordering::Relaxed)));
+        std::fs::write(&path, raw).unwrap();
+        let out = Config::load(&path);
+        let _ = std::fs::remove_file(&path);
+        out
+    }
+
+    #[test]
+    fn manages_routes_by_default() {
+        assert!(load_str(BASE).unwrap().manage_routes);
+    }
+
+    #[test]
+    fn route_management_can_be_ticked_off_alongside_serve() {
+        let raw = format!("manage_routes = false\n{BASE}{SERVE}");
+        let cfg = load_str(&raw).unwrap();
+        assert!(!cfg.manage_routes);
+        assert!(cfg.serve.is_some());
+    }
+
+    #[test]
+    fn rejects_route_management_off_without_serve() {
+        let raw = format!("manage_routes = false\n{BASE}");
+        assert!(load_str(&raw).is_err());
     }
 }

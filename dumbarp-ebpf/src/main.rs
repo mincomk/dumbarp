@@ -28,6 +28,12 @@ static DSCP_ID: HashMap<u32, u8> = HashMap::with_max_entries(64, 0);
 #[map]
 static ORIG_DSCP: LruHashMap<FlowKey, u8> = LruHashMap::with_max_entries(65536, 0);
 
+// Map: ifindex -> bytes of link-layer header the egress classifier will see.
+// Userspace fills it from the interface's ARP hardware type, because an L3
+// device carries none and `skb->data` points straight at the IP header there.
+#[map]
+static L2_LEN: HashMap<u32, u8> = HashMap::with_max_entries(64, 0);
+
 // ARP header for IPv4-over-Ethernet. network-types doesn't ship an ArpHdr,
 // so we define our own packed struct.
 #[repr(C, packed)]
@@ -196,24 +202,26 @@ pub fn dumbarp_egress(ctx: TcContext) -> i32 {
 fn try_terminate(ctx: &TcContext) -> Result<i32, ()> {
     let pass = TC_ACT_OK as i32;
 
-    let eth: EthHdr = ctx.load(0).map_err(|_| ())?;
-    if eth.ether_type != EtherType::Ipv4.into() {
+    if unsafe { (*ctx.skb.skb).protocol } != u32::from(EtherType::Ipv4 as u16) {
         return Ok(pass);
     }
-
-    let ip: Ipv4Hdr = ctx.load(EthHdr::LEN).map_err(|_| ())?;
-    let old_tos = ip.tos;
 
     let ifindex = unsafe { (*ctx.skb.skb).ifindex };
     let our_id = match unsafe { DSCP_ID.get(&ifindex) } {
         Some(id) if *id != 0 => *id,
         _ => return Ok(pass),
     };
+    let Some(l2) = l2_len(ifindex) else {
+        return Ok(pass);
+    };
+
+    let ip: Ipv4Hdr = ctx.load(l2).map_err(|_| ())?;
+    let old_tos = ip.tos;
     if old_tos >> 2 != our_id {
         return Ok(pass);
     }
 
-    let key = tc_flow_key(ctx, &ip);
+    let key = tc_flow_key(ctx, &ip, l2);
     let restored = unsafe { ORIG_DSCP.get(&key) }.copied().unwrap_or(0);
 
     let new_tos = tos_with_dscp(old_tos, restored);
@@ -224,10 +232,10 @@ fn try_terminate(ctx: &TcContext) -> Result<i32, ()> {
     let old_word = ((ip.vihl as u16) << 8) | old_tos as u16;
     let new_word = ((ip.vihl as u16) << 8) | new_tos as u16;
 
-    ctx.store(EthHdr::LEN + IPV4_TOS_OFFSET, &new_tos, 0)
+    ctx.store(l2 + IPV4_TOS_OFFSET, &new_tos, 0)
         .map_err(|_| ())?;
     ctx.l3_csum_replace(
-        EthHdr::LEN + IPV4_CHECK_OFFSET,
+        l2 + IPV4_CHECK_OFFSET,
         old_word.to_be() as u64,
         new_word.to_be() as u64,
         2,
@@ -237,7 +245,17 @@ fn try_terminate(ctx: &TcContext) -> Result<i32, ()> {
     Ok(pass)
 }
 
-fn tc_flow_key(ctx: &TcContext, ip: &Ipv4Hdr) -> FlowKey {
+// Normalise to one of two constants so a corrupt map value can never turn into
+// a wild offset for the store and checksum helpers below.
+fn l2_len(ifindex: u32) -> Option<usize> {
+    match unsafe { L2_LEN.get(&ifindex) }.copied() {
+        Some(0) => Some(0),
+        Some(_) => Some(EthHdr::LEN),
+        None => None,
+    }
+}
+
+fn tc_flow_key(ctx: &TcContext, ip: &Ipv4Hdr, l2: usize) -> FlowKey {
     let src = u32::from_ne_bytes(ip.src_addr);
     let dst = u32::from_ne_bytes(ip.dst_addr);
     let proto = ip.proto;
@@ -245,7 +263,7 @@ fn tc_flow_key(ctx: &TcContext, ip: &Ipv4Hdr) -> FlowKey {
     let mut sport = 0u16;
     let mut dport = 0u16;
     if (proto == IPPROTO_TCP || proto == IPPROTO_UDP) && ip.ihl() as usize == Ipv4Hdr::LEN
-        && let Ok(ports) = ctx.load::<[u8; 4]>(EthHdr::LEN + Ipv4Hdr::LEN)
+        && let Ok(ports) = ctx.load::<[u8; 4]>(l2 + Ipv4Hdr::LEN)
     {
         sport = u16::from_be_bytes([ports[0], ports[1]]);
         dport = u16::from_be_bytes([ports[2], ports[3]]);
